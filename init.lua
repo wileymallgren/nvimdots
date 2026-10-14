@@ -1,0 +1,10 @@
+require("config.options")
+require("config.lazy")
+require("config.keymaps")
+
+-- Hand-written features (see the header of each file for its keymaps)
+require("config.dim-behind-float")
+require("config.tex-preview")
+require("config.latex-hl").setup()
+require("config.rmd-latex-hl").setup()
+require("config.rmd-knit").setup()
