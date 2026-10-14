@@ -57,12 +57,22 @@ return {
   config = function()
     local actions = require("telescope.actions")
 
+    -- Search hidden files/dirs too, but never descend into .git
+    local vimgrep_arguments = vim.deepcopy(require("telescope.config").values.vimgrep_arguments)
+    vim.list_extend(vimgrep_arguments, { "--hidden", "--glob", "!**/.git/*", "--no-ignore" })
+
     require("telescope").setup({
       defaults = {
+        vimgrep_arguments = vimgrep_arguments,
         mappings = {
           i = {
             ["<esc>"] = actions.close, -- close Telescope instead of entering normal mode
           },
+        },
+      },
+      pickers = {
+        find_files = {
+          find_command = { "rg", "--files", "--color", "never", "--hidden", "--glob", "!**/.git/*", "--no-ignore" },
         },
       },
       extensions = {
