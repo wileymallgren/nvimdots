@@ -57,6 +57,32 @@ if vim.fn.executable(venv_python) == 1 then
   vim.g.python3_host_prog = venv_python
 end
 
+-- IRkernel::installspec() writes R's versioned Cellar path into kernel.json,
+-- which breaks on every `brew upgrade r`. Before starting the kernel, point
+-- it at the R on PATH (/opt/homebrew/bin/R, a symlink that survives upgrades).
+local IR_KERNELSPECS = {
+  "~/Library/Jupyter/kernels/ir/kernel.json", -- macOS
+  "~/.local/share/jupyter/kernels/ir/kernel.json", -- Linux
+}
+
+local function fix_ir_kernelspec()
+  local r = vim.fn.exepath("R")
+  if r == "" then
+    vim.notify("Molten: no R binary on PATH", vim.log.levels.ERROR)
+    return
+  end
+  for _, p in ipairs(IR_KERNELSPECS) do
+    local path = vim.fn.expand(p)
+    if vim.fn.filereadable(path) == 1 then
+      local ok, spec = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
+      if ok and type(spec) == "table" and type(spec.argv) == "table" and spec.argv[1] ~= r then
+        spec.argv[1] = r
+        vim.fn.writefile({ vim.json.encode(spec) }, path)
+      end
+    end
+  end
+end
+
 local function elapsed_ms(t0)
   return math.floor((vim.uv.hrtime() - t0) / 1e6)
 end
@@ -217,7 +243,10 @@ return {
           local function map(lhs, rhs, desc)
             vim.keymap.set("n", lhs, rhs, { buffer = ev.buf, silent = true, desc = desc })
           end
-          map("<localleader>mi", "<cmd>MoltenInit ir<CR>", "Molten: start R kernel")
+          map("<localleader>mi", function()
+            fix_ir_kernelspec()
+            vim.cmd("MoltenInit ir")
+          end, "Molten: start R kernel")
           map("<localleader>mc", run_chunk, "Molten: run current chunk")
           map("<localleader>ma", function()
             run_chunks()
