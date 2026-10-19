@@ -37,7 +37,7 @@ return {
           "  󰒓 Config",
           "<cmd>cd " .. vim.fn.fnameescape(vim.fn.stdpath("config")) .. " | Telescope find_files<CR>"
         ),
-        dashboard.button("u", "  󰚰 Update", "<cmd>Lazy! sync | q | MasonSync<CR>"),
+        dashboard.button("u", "  󰚰 Update", "<cmd>Lazy! sync | q | MasonSync!<CR>"),
         dashboard.button("m", "   Mason", "<cmd>Mason<CR>"),
         dashboard.button("t", "   ToggleTerm", "<cmd>ToggleTerm<CR>"),
         dashboard.button("g", "   LazyGit", "<cmd>LazyGit<CR>"),
