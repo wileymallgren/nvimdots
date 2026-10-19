@@ -31,6 +31,19 @@ local function diagnostics_with_hooks()
   })
 end
 
+local binary_exts = {}
+for _, ext in ipairs({
+  "pdf", "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "ico", "webp", "heic", "psd",
+  "mp3", "mp4", "m4a", "mov", "avi", "mkv", "wav", "flac", "ogg", "webm",
+  "zip", "gz", "tgz", "tar", "bz2", "xz", "7z", "rar", "dmg", "iso",
+  "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "key", "pages", "numbers",
+  "o", "a", "so", "dylib", "dll", "exe", "bin", "class", "jar", "pyc", "wasm",
+  "rds", "rdata", "rda", "pkl", "pickle", "npy", "npz", "h5", "hdf5", "parquet", "feather",
+  "sqlite", "sqlite3", "db", "woff", "woff2", "ttf", "otf", "eot",
+}) do
+  binary_exts[ext] = true
+end
+
 return {
   "nvim-telescope/telescope.nvim",
   version = "*",
@@ -86,5 +99,23 @@ return {
     })
 
     require("telescope").load_extension("fzf")
+
+    -- Rank binary files (pdf, images, archives, ...) below everything else so
+    -- e.g. hw3.Rmd comes before hw3.pdf. They still match, just last.
+    local tconf = require("telescope.config").values
+    local base_file_sorter = tconf.file_sorter
+    tconf.file_sorter = function(opts)
+      local sorter = base_file_sorter(opts)
+      local score_fn = sorter.scoring_function
+      sorter.scoring_function = function(self, prompt, line, ...)
+        local score = score_fn(self, prompt, line, ...)
+        local ext = line:match("%.([^./\\]+)$")
+        if score >= 0 and ext and binary_exts[ext:lower()] then
+          score = score + 1 -- fzf scores are in (0, 1], so this puts binaries last
+        end
+        return score
+      end
+      return sorter
+    end
   end,
 }
