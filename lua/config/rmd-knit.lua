@@ -3,6 +3,10 @@
 --   <localleader>kk  knit (first output format in the YAML header)
 --   <localleader>ko  open the knitted file (pdf, falling back to html / docx)
 --
+-- In a Jupyter notebook (.ipynb, see lua/plugins/jupytext.lua) <localleader>kk
+-- runs every cell in a fresh kernel and exports HTML with nbconvert, the
+-- notebook equivalent of knitting. Needs nbconvert in ~/.venvs/nvim.
+--
 -- Output opens in Skim on macOS if it is installed (it auto-reloads on
 -- re-knit), otherwise in the system default viewer.
 
@@ -25,8 +29,32 @@ local function open_output(path)
   end
 end
 
+local NBCONVERT_PYTHON = vim.fn.expand("~/.venvs/nvim/bin/python3")
+
+-- Command that knits `name` (a file in the current buffer's directory).
+local function knit_cmd(buf, name)
+  if name:match("%.ipynb$") then
+    local cmd = { NBCONVERT_PYTHON, "-m", "nbconvert", "--to", "html", "--execute" }
+    local kernel = require("config.python-env").kernel(buf)
+    if kernel then
+      table.insert(cmd, "--ExecutePreprocessor.kernel_name=" .. kernel)
+    end
+    table.insert(cmd, name)
+    return cmd
+  end
+  return {
+    "Rscript",
+    "-e",
+    ("rmarkdown::render(%s, quiet = TRUE, envir = new.env())"):format(vim.fn.json_encode(name)),
+  }
+end
+
 local function knit(buf)
-  if vim.fn.executable("Rscript") ~= 1 then
+  local is_notebook = vim.api.nvim_buf_get_name(buf):match("%.ipynb$") ~= nil
+  if is_notebook and vim.fn.executable(NBCONVERT_PYTHON) ~= 1 then
+    vim.notify("No python at " .. NBCONVERT_PYTHON .. " (needs nbconvert)", vim.log.levels.ERROR)
+    return
+  elseif not is_notebook and vim.fn.executable("Rscript") ~= 1 then
     vim.notify("Rscript not found in PATH", vim.log.levels.ERROR)
     return
   end
@@ -37,11 +65,7 @@ local function knit(buf)
   local t0 = vim.uv.hrtime()
   vim.notify("Knitting " .. name .. "...")
 
-  vim.system({
-    "Rscript",
-    "-e",
-    ("rmarkdown::render(%s, quiet = TRUE, envir = new.env())"):format(vim.fn.json_encode(name)),
-  }, { cwd = dir, text = true }, function(res)
+  vim.system(knit_cmd(buf, name), { cwd = dir, text = true }, function(res)
     vim.schedule(function()
       if res.code == 0 then
         local secs = (vim.uv.hrtime() - t0) / 1e9

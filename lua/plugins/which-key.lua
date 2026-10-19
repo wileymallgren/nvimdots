@@ -22,7 +22,7 @@ return {
         { "<leader>t", group = "Terminal", icon = { icon = "", color = "red" } },
         { "<leader>R", group = "Remote", icon = { icon = "", color = "blue" } },
         { "<leader>c", group = "Code / cwd", icon = { icon = "", color = "orange" } },
-        { "<localleader>m", group = "Molten (R chunks)", icon = { cat = "filetype", name = "r" } },
+        { "<localleader>m", group = "Molten (code chunks)", icon = { cat = "filetype", name = "r" } },
         { "<localleader>k", group = "Knit", icon = { cat = "extension", name = "rmd" } },
         -- Render (lua/config/tex-preview.lua)
         { "<leader>rp", mode = { "n", "v" }, icon = { icon = "", color = "azure" } },

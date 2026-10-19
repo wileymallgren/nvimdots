@@ -22,7 +22,17 @@ return {
       typescriptreact = { "prettier" },
       json = { "prettier" },
       yaml = { "prettier" },
-      markdown = { "prettier" },
+      -- "injected" formats the code inside ``` chunks with the formatters
+      -- below (python: ruff, r: styler). Notebooks (.ipynb opened as markdown
+      -- by jupytext) skip prettier so the jupytext header is left alone.
+      markdown = function(buf)
+        if vim.api.nvim_buf_get_name(buf):match("%.ipynb$") then
+          return { "injected" }
+        end
+        return { "prettier", "injected" }
+      end,
+      rmd = { "injected" },
+      quarto = { "injected" },
       html = { "prettier" },
       css = { "prettier" },
       toml = { "prettier" },
@@ -31,6 +41,13 @@ return {
       java = { "google_java_format" },
       sql = { "sqlfluff" },
       r = { "styler" },
+    },
+    formatters = {
+      injected = {
+        -- A chunk the formatter can't parse (e.g. `%matplotlib inline`) is
+        -- left as is instead of failing the whole buffer
+        options = { ignore_errors = true },
+      },
     },
   },
 }

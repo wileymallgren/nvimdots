@@ -9,8 +9,12 @@ LaTeX-heavy notes, with a few hand-written features:
   `queries/`): maths, environments and raw LaTeX commands get colour inside `.Rmd` / `.qmd` / `.md`.
 - **Dim behind floats** (`lua/config/dim-behind-float.lua`): windows behind a focused floating window are dimmed,
   including Tree-sitter and LSP colours.
-- **Inline Jupyter output for R chunks** via molten-nvim (`lua/plugins/molten.lua`), plus background knitting
-  (`lua/config/rmd-knit.lua`).
+- **Inline Jupyter output for R and Python chunks** via molten-nvim (`lua/plugins/molten.lua`), plus background
+  knitting (`lua/config/rmd-knit.lua`).
+- **Jupyter notebooks as markdown** (`lua/plugins/jupytext.lua`): `.ipynb` files open as markdown with ```` ```python ````
+  cells, so they get everything R Markdown gets: run cells with molten, LaTeX highlighting and previews, `\kk` to
+  execute and export HTML. Outputs are saved back into the notebook. Python LSP inside cells comes from otter.nvim
+  (`lua/plugins/otter.lua`), and the kernel is the project's `.venv` (`lua/config/python-env.lua`).
 - **`:MasonSync`**: installs the Mason tools listed in `lua/plugins/lsp.lua` on a new machine.
 
 ## Try it without touching your own config
@@ -41,6 +45,7 @@ Optional, per feature:
 | `<leader>r*` LaTeX/markdown previews | `tectonic` or `pdflatex`, `pdftoppm` (poppler), `pandoc`; optional `magick` (ImageMagick); a terminal with the kitty graphics protocol (kitty, WezTerm, Ghostty) |
 | Inline plots (molten / image.nvim) | `magick` (ImageMagick) and the same kind of terminal |
 | R, knitting, molten | R with `rmarkdown`; for molten: `IRkernel` (`IRkernel::installspec()`) and a Python ≥ 3.10 venv at `~/.venvs/nvim` with `pynvim` and `jupyter_client` |
+| Jupyter notebooks | `jupytext` (`brew install jupytext`); `nbconvert` in `~/.venvs/nvim` (for `\kk`); `ipykernel` in the project's `.venv` (registered as a kernel on the first `\mi`) |
 | Codeium completions | a free Codeium account: run `:Codeium Auth` once |
 | `<leader>R*` remote editing | SSH hosts in `~/.ssh/config` (note: remote-nvim.nvim is archived upstream) |
 | Julia LSP, R LSP, `rustfmt`, `styler` | come from the Julia / R / Rust toolchains, not Mason |
@@ -58,6 +63,7 @@ lua/config/lazy.lua      lazy.nvim bootstrap
 lua/config/*.lua         hand-written features (one file each, documented in its header)
 lua/plugins/*.lua        one lazy.nvim spec per plugin; plugin keymaps live in each spec's `keys`
 queries/                 extra Tree-sitter queries (LaTeX highlighting, LaTeX inside markdown)
+after/queries/           query extensions (code-cell text objects for markdown)
 lazy-lock.json           pinned plugin versions
 ```
 
@@ -78,8 +84,10 @@ Leader is `<Space>`, local leader is `\`. Press `<Space>` and wait for which-key
 | `<leader>rp` `rm` `ra` `rs` `rla` `rls` | LaTeX/markdown previews: under cursor (or selection), as markdown, whole buffer, screen, LaTeX only |
 | `<leader>rr` `rw` `rx` `rc` | previews: repeat last, toggle re-render on save, clear under cursor, clear all |
 | `<leader>r+` `r-` `rt` `ro` `re` | previews: bigger, smaller, toggle theme/paper colours, open last as PDF, edit last `.tex`; more settings with `:TexPreviewSet` |
-| `\mi` `\mc` `\ma` `\mD` ... | molten (R Markdown): start kernel, run chunk, run all, clear outputs |
-| `\kk` / `\ko` | knit R Markdown / open the output |
+| `\mi` `\mc` `\ma` `\mD` ... | molten (R Markdown, markdown, notebooks): start kernel(s), run chunk, run all, clear outputs |
+| `\kk` / `\ko` | knit R Markdown (notebooks: execute + export HTML) / open the output |
+| `ix` `ax`, `]x` `[x` | code chunk / notebook cell: select inside / with fences; next / previous (markdown, Rmd, notebooks) |
+| `:NewNotebook {name}` | create and open an empty Jupyter notebook |
 | `<leader>y` / `<leader>d` | yank / delete to system clipboard |
 | `<leader>i` / `<leader>m` | toggle boolean / split-join (treesj) |
 | `af` `if` `ac` `ic` `aa` `ia`, `]f` `[f` `]c` `[c` | Tree-sitter text objects and motions (in a diff, `]c` `[c` still jump between changes) |
