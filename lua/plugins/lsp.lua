@@ -137,15 +137,59 @@ return {
         update_in_insert = false,
       })
 
+      -- In code chunks (otter's hidden *.otter.py buffers), a bare `x` or
+      -- `df.head()` at the end of a cell is how a value gets displayed, so
+      -- don't flag it there. Regular .py files keep both checks.
+      local CELL_IGNORED = { reportUnusedExpression = true, reportUnusedCallResult = true }
+      local function drop_cell_noise(uri, diags)
+        if not (uri and diags and uri:match("%.otter%.")) then
+          return diags
+        end
+        return vim.tbl_filter(function(d)
+          return not CELL_IGNORED[d.code]
+        end, diags)
+      end
+
       vim.lsp.config("basedpyright", {
+        handlers = {
+          ["textDocument/publishDiagnostics"] = function(err, result, ctx)
+            if result then
+              result.diagnostics = drop_cell_noise(result.uri, result.diagnostics)
+            end
+            return vim.lsp.handlers["textDocument/publishDiagnostics"](err, result, ctx)
+          end,
+          ["textDocument/diagnostic"] = function(err, result, ctx)
+            if result and result.items then
+              result.items = drop_cell_noise(ctx.params.textDocument.uri, result.items)
+            end
+            return vim.lsp.handlers["textDocument/diagnostic"](err, result, ctx)
+          end,
+        },
+        -- Resolve imports with the project's .venv (or the active
+        -- $VIRTUAL_ENV) even when Neovim wasn't started from inside it.
+        before_init = function(_, config)
+          local python = require("config.python-env").project_python(config.root_dir)
+          if python then
+            config.settings.python = vim.tbl_extend("force", config.settings.python or {}, { pythonPath = python })
+          end
+        end,
         settings = {
           basedpyright = {
+            disableOrganizeImports = true, -- ruff does it (conform + code actions)
             analysis = {
               typeCheckingMode = "recommended",
               diagnosticMode = "workspace",
             },
           },
         },
+      })
+
+      -- ruff: lint diagnostics and fix-all / organize-imports code actions.
+      -- Hover stays with basedpyright.
+      vim.lsp.config("ruff", {
+        on_attach = function(client)
+          client.server_capabilities.hoverProvider = false
+        end,
       })
 
       vim.lsp.config("lua_ls", {
@@ -186,6 +230,7 @@ return {
       -- Servers without settings above use nvim-lspconfig's defaults
       vim.lsp.enable({
         "basedpyright",
+        "ruff",
         "rust_analyzer",
         "gopls",
         "ts_ls",

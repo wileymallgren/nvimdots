@@ -87,6 +87,31 @@ return {
       swap.swap_previous("@parameter.inner")
     end, { desc = "Swap with previous parameter" })
 
+    -- === Code chunks / notebook cells (markdown, R Markdown, Quarto, .ipynb) ===
+    -- Query: after/queries/markdown/textobjects.scm. Not ib / ab / ]b / [b:
+    -- those are the built-in ( ) block objects and Neovim's :bnext / :bprevious.
+    vim.api.nvim_create_autocmd("FileType", {
+      group = vim.api.nvim_create_augroup("CodeCellTextobjects", { clear = true }),
+      pattern = { "markdown", "rmd", "quarto" },
+      callback = function(ev)
+        local function map(modes, lhs, fn, desc)
+          vim.keymap.set(modes, lhs, fn, { buffer = ev.buf, desc = desc })
+        end
+        map({ "x", "o" }, "ix", function()
+          select.select_textobject("@code_cell.inner", "textobjects")
+        end, "Select inside code cell")
+        map({ "x", "o" }, "ax", function()
+          select.select_textobject("@code_cell.outer", "textobjects")
+        end, "Select code cell with fences")
+        map({ "n", "x", "o" }, "]x", function()
+          move.goto_next_start("@code_cell.inner", "textobjects")
+        end, "Next code cell")
+        map({ "n", "x", "o" }, "[x", function()
+          move.goto_previous_start("@code_cell.inner", "textobjects")
+        end, "Previous code cell")
+      end,
+    })
+
     -- ; and , are left to flash.nvim, which repeats f / F / t / T with them.
     -- To repeat ]f / ]c etc., press the motion again.
   end,
