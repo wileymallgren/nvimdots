@@ -36,10 +36,13 @@
 --
 -- "Everything renderable" = every LaTeX environment, display math, and any
 -- paragraph containing inline math, a LaTeX command, or a markdown list.
--- Code fences and YAML front matter are skipped.
+-- Code chunks, inline code (`...`) and YAML front matter are skipped, using
+-- the same detection as the highlighting (lua/config/rmd-latex-hl.lua).
 --
 -- Deps: tectonic OR pdflatex, pdftoppm (brew install poppler),
 --       optional: pandoc (brew install pandoc) for markdown mode.
+
+local rmd = require("config.rmd-latex-hl") -- shared code / maths detection
 
 local cfg = {
   width = "450pt", -- max text width of the rendered snippet
@@ -109,7 +112,8 @@ end
 -- Detection
 ---------------------------------------------------------------------------
 
--- Blank out fenced code blocks and YAML front matter (keeps line numbers)
+-- Blank out fenced code blocks and YAML front matter (keeps line numbers).
+-- Used outside markdown buffers; see detect_lines.
 local function mask_code(lines)
   local out, in_fence = {}, false
   for i, l in ipairs(lines) do
@@ -135,6 +139,17 @@ local function mask_code(lines)
   return out
 end
 
+-- Lines to detect on (same line numbers). In markdown buffers this comes from
+-- rmd-latex-hl: code chunks, inline code and YAML front matter are blanked,
+-- so LaTeX shown as code (`$$`, `\begin{align}`, `df$x`) is never previewed
+-- and the previews agree with the highlighting.
+local function detect_lines(buf, lines)
+  if rmd.handles(buf) then
+    return rmd.masked_lines(buf)
+  end
+  return mask_code(lines)
+end
+
 -- plain-find a token that is not preceded by a backslash (avoids `\\[2pt]`)
 local function has_token(line, tok)
   local init = 1
@@ -156,6 +171,12 @@ local function collect_latex_blocks(lines)
   local disp_start, dollar_start
 
   for i, l in ipairs(lines) do
+    -- \[ and $$ don't pair across a blank line (they're inline in pandoc), so
+    -- one stray delimiter can't swallow the paragraphs after it
+    if l:match("^%s*$") then
+      disp_start, dollar_start = nil, nil
+    end
+
     for kind, name in l:gmatch("\\(%a+){([%w%*]+)}") do
       if kind == "begin" then
         stacks[name] = stacks[name] or {}
@@ -207,32 +228,9 @@ local function find_latex_block(lines, row)
 end
 
 -- All inline math on a line: { {s=, e=, text=}, ... } (e is exclusive).
--- $...$ follows pandoc's rules (no space just inside the dollars, closing $
--- not followed by a digit) so prices like "$5 and $10" are not picked up.
--- \( ... \) is supported too.
-local function inline_math_in(line)
-  local out = {}
-  for s, content, e in line:gmatch("()%$([^%$]+)%$()") do
-    local before, after = line:sub(s - 1, s - 1), line:sub(e, e)
-    if
-      content:match("^%S")
-      and content:match("%S$")
-      and not after:match("%d")
-      and before ~= "\\"
-      and before ~= "$"
-      and after ~= "$"
-    then
-      table.insert(out, { s = s, e = e, text = "$" .. content .. "$" })
-    end
-  end
-  for s, content, e in line:gmatch("()\\%((.-)\\%)()") do
-    table.insert(out, { s = s, e = e, text = "\\(" .. content .. "\\)" })
-  end
-  table.sort(out, function(a, b)
-    return a.s < b.s
-  end)
-  return out
-end
+-- $...$ (pandoc's rules, so prices like "$5 and $10" are not picked up) and
+-- \( ... \), found exactly as the highlighting finds them.
+local inline_math_in = rmd.inline_math
 
 -- Returns the inline math text under the cursor, if any
 local function find_inline_math(line, col0)
@@ -602,7 +600,7 @@ local function preview_auto()
   request_n = key_count
   local buf, win = ctx()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local masked = mask_code(lines)
+  local masked = detect_lines(buf, lines)
   local cur = vim.api.nvim_win_get_cursor(win)
   local row, col = cur[1], cur[2]
 
@@ -633,7 +631,7 @@ local function preview_markdown(s, e)
   local buf, win = ctx()
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if not s then
-    s, e = find_paragraph(mask_code(lines), vim.api.nvim_win_get_cursor(win)[1])
+    s, e = find_paragraph(detect_lines(buf, lines), vim.api.nvim_win_get_cursor(win)[1])
   end
   if not s then
     return vim.notify("No paragraph under cursor", vim.log.levels.WARN)
@@ -660,7 +658,7 @@ local function preview_many(first, last, latex_only)
     return vim.notify(err, vim.log.levels.ERROR)
   end
 
-  local targets = collect_targets(mask_code(lines), first, last, latex_only)
+  local targets = collect_targets(detect_lines(buf, lines), first, last, latex_only)
   if #targets == 0 then
     return vim.notify("Nothing to preview", vim.log.levels.WARN)
   end
@@ -773,7 +771,7 @@ end
 -- Clear only the preview(s) belonging to the block / paragraph under the cursor
 local function clear_at_cursor()
   local buf, win = ctx()
-  local masked = mask_code(vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  local masked = detect_lines(buf, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
   local row = vim.api.nvim_win_get_cursor(win)[1]
   local s, e = find_latex_block(masked, row)
   if not s then
