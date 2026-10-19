@@ -79,7 +79,9 @@ return {
         end
       end
 
-      local function sync(notify)
+      -- on_success (optional) runs once every install started here has
+      -- succeeded, or right away when nothing needed installing.
+      local function sync(notify, on_success)
         registry.refresh(function()
           local wanted, seen = {}, {}
           for _, n in ipairs(vim.list_extend(vim.deepcopy(baseline), read_state())) do
@@ -88,12 +90,21 @@ return {
               wanted[#wanted + 1] = n
             end
           end
-          local started = 0
+          local started, pending, failed = 0, 0, false
+          local function finish_one(success)
+            pending = pending - 1
+            failed = failed or not success
+            if pending == 0 and not failed and on_success then
+              vim.schedule(on_success)
+            end
+          end
           for _, name in ipairs(wanted) do
             local ok, pkg = pcall(registry.get_package, name)
             if ok and not pkg:is_installed() and not pkg:is_installing() then
               started = started + 1
+              pending = pending + 1
               pkg:install({}, function(success)
+                finish_one(success)
                 if not success then
                   vim.schedule(function()
                     vim.notify("Mason: failed to install " .. name .. " (see :MasonLog)", vim.log.levels.WARN)
@@ -110,13 +121,26 @@ return {
               )
             end)
           end
+          if started == 0 and on_success then
+            vim.schedule(on_success)
+          end
           write_state()
         end)
       end
 
-      vim.api.nvim_create_user_command("MasonSync", function()
-        sync(true)
+      -- :MasonSync! also clears the message line 1s after a successful sync
+      -- (used by the dashboard's Update button).
+      vim.api.nvim_create_user_command("MasonSync", function(opts)
+        sync(
+          true,
+          opts.bang and function()
+            vim.defer_fn(function()
+              vim.cmd("echo ''")
+            end, 1000)
+          end or nil
+        )
       end, {
+        bang = true,
         desc = "Install Mason packages from mason-packages.json + baseline; record local installs",
       })
       -- Record installs made by hand (:Mason) so they sync next time.
