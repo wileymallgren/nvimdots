@@ -4,8 +4,12 @@
 --    "yaml", "prose" or "code"; lang is the treesitter language there, so an
 --    R chunk in an Rmd reports "r", not "markdown".
 --  * M.file_arg() -> { base_dir, exts, typed } when the cursor is in the
---    file-name argument of a call like read.csv("…") or pd.read_csv("…").
+--    file-name argument of a call like read.csv("…") or pd.read_csv("…"), a
+--    markdown link / image target, or a YAML file key (bibliography: …).
 --    Used by the file-name source (lua/config/cmp-file-args.lua).
+--  * M.open_calls() / M.given_args(): the calls the cursor is inside, and
+--    the argument names already written in the innermost one.
+--  * M.word_langs(): where each word of the buffer appears (prose, r, …).
 --
 -- Everything reads the trees the highlighter has already parsed (no parse()),
 -- so it stays cheap on large files.
@@ -57,6 +61,47 @@ M.file_functions = {
   exists = ANY,
   savefig = ANY,
   to_csv = ANY,
+}
+
+-- dplyr/tidyr verbs whose arguments are columns of the data frame (first
+-- argument or piped in). Also R.nvim's fun_data_1 (lua/plugins/R.lua) and
+-- the columns source (lua/config/cmp-columns.lua).
+M.data_verbs = {
+  -- R.nvim's own four first: it merges this list into its default by position
+  "select",
+  "rename",
+  "mutate",
+  "filter",
+  "arrange",
+  "group_by",
+  "summarise",
+  "summarize",
+  "distinct",
+  "count",
+  "pull",
+  "relocate",
+  "transmute",
+  "slice_max",
+  "slice_min",
+  "pivot_longer",
+  "pivot_wider",
+  "unite",
+  "separate",
+  "drop_na",
+  "fill",
+  "nest",
+}
+
+-- File keys in a YAML header -> extensions
+local YAML_FILE_KEYS = {
+  bibliography = { "bib", "json", "yaml" },
+  csl = { "csl" },
+  css = { "css" },
+  in_header = ANY,
+  before_body = ANY,
+  after_body = ANY,
+  reference_docx = { "docx" },
+  template = ANY,
 }
 
 -- Named arguments that take the file name (any position)
@@ -209,7 +254,7 @@ end
 
 -- Relative paths in documents/notebooks resolve where knitr/Jupyter run
 -- them (the file's folder); in scripts, from the project you opened.
-local function base_dir(buf, fname)
+function M.base_dir(buf, fname)
   if fname == "here" then
     return vim.fs.root(buf, { ".here", ".git" }) or vim.fn.getcwd()
   end
@@ -219,10 +264,41 @@ local function base_dir(buf, fname)
   return vim.fn.getcwd()
 end
 
+-- Markdown link / image targets and YAML file keys, in documents
+local function doc_file_arg(buf, line, col)
+  if not require("config.rmd-latex-hl").handles(buf) then
+    return nil
+  end
+  local before = line:sub(1, col)
+  local lang = lang_at(buf)
+  local exts, start
+  if lang == "markdown" or lang == "markdown_inline" then
+    local bang
+    bang, start = before:match("(!?)%[[^%]]*%]%(()[^)%s]*$")
+    exts = bang == "!" and IMAGES or ANY
+  elseif lang == "yaml" then
+    local key
+    key, start = before:match("^%s*([%w_]+):%s*[\"']?()[^\"']*$")
+    exts = key and YAML_FILE_KEYS[key]
+  end
+  if not (start and exts) then
+    return nil
+  end
+  return {
+    base_dir = vim.fs.dirname(vim.api.nvim_buf_get_name(buf)),
+    exts = exts,
+    typed = before:sub(start),
+  }
+end
+
 function M.file_arg(buf)
   buf = buf or vim.api.nvim_get_current_buf()
   local row, col = cursor()
   local line = vim.api.nvim_get_current_line()
+  local doc = doc_file_arg(buf, line, col)
+  if doc then
+    return doc
+  end
   local str = find_up(node_before_cursor(buf), function(n)
     return n:type() == "string"
   end)
@@ -251,10 +327,125 @@ function M.file_arg(buf)
     return nil
   end
   return {
-    base_dir = base_dir(buf, fname),
+    base_dir = M.base_dir(buf, fname),
     exts = exts,
     typed = line:sub(start_col + 1, col), -- text after the quote, up to the cursor
   }
+end
+
+-- The text from up to `max_lines` lines back to the cursor, with string
+-- contents blanked so their brackets, commas and `=` don't count
+local function text_before_cursor(max_lines)
+  local row, col = cursor()
+  local lines = vim.api.nvim_buf_get_lines(0, math.max(0, row - max_lines), row + 1, false)
+  lines[#lines] = lines[#lines]:sub(1, col)
+  local text = table.concat(lines, "\n")
+  return (text:gsub('"[^"\n]*"', '""'):gsub("'[^'\n]*'", "''"))
+end
+
+local OPENERS, CLOSERS = { ["("] = true, ["["] = true, ["{"] = true }, { [")"] = true, ["]"] = true, ["}"] = true }
+
+-- Calls the cursor is inside, innermost first: { name, before, args },
+-- where `name` is the function (without `pkg::`), `before` the text before
+-- it and `args` the text from its `(` to the cursor. Plain text, because
+-- the code being typed usually doesn't parse yet.
+function M.open_calls()
+  local text = text_before_cursor(30)
+  local calls, depth = {}, 0
+  for i = #text, 1, -1 do
+    local ch = text:sub(i, i)
+    if CLOSERS[ch] then
+      depth = depth + 1
+    elseif OPENERS[ch] then
+      if depth > 0 then
+        depth = depth - 1
+      elseif ch == "(" then
+        local head = text:sub(1, i - 1)
+        local name = head:match("([%a._][%w._]*)%s*$")
+        if name then
+          calls[#calls + 1] = {
+            name = name,
+            before = head:sub(1, #head - #head:match("[%w._:]*%s*$")),
+            args = text:sub(i + 1),
+          }
+        end
+      end
+    end
+  end
+  return calls
+end
+
+-- `args` text with everything inside nested brackets removed
+local function top_level(args)
+  local out, depth = {}, 0
+  for ch in args:gmatch(".") do
+    if OPENERS[ch] then
+      depth = depth + 1
+    elseif CLOSERS[ch] then
+      depth = depth - 1
+    elseif depth == 0 then
+      out[#out + 1] = ch
+    end
+  end
+  return table.concat(out)
+end
+M.top_level = top_level
+
+-- Names of the arguments already given (`name =`) in the innermost call,
+-- not counting the one being typed
+function M.given_args()
+  local call = M.open_calls()[1]
+  local names = {}
+  if not call then
+    return names
+  end
+  local done = top_level(call.args):gsub("[^,]*$", "") -- drop the argument being typed
+  for name in ("," .. done):gmatch(",%s*([%a._][%w._]*)%s*=[^=]") do
+    names[name] = true
+  end
+  return names
+end
+
+-- word -> { [lang] = true } for every word in the buffer's prose ("prose"),
+-- YAML header ("yaml") and code (identifiers and strings, per language).
+-- Rebuilt at most once a second while typing; words that aren't in it yet
+-- (just typed) are unknown, and callers keep them.
+local WORD_QUERIES = {
+  markdown_inline = "(inline) @w",
+  yaml = "(flow_node) @w",
+  default = "[(identifier) (string)] @w",
+}
+local word_cache = {}
+function M.word_langs(buf)
+  buf = buf or vim.api.nvim_get_current_buf()
+  local tick, now = vim.b[buf].changedtick, vim.uv.now()
+  local c = word_cache[buf]
+  if c and (c.tick == tick or now - c.time < 1000) then
+    return c.where
+  end
+  local where = {}
+  local ok, parser = pcall(vim.treesitter.get_parser, buf, nil, { error = false })
+  if ok and parser then
+    parser:for_each_tree(function(tree, ltree)
+      local lang = ltree:lang()
+      if lang == "markdown" or lang == "latex" then
+        return
+      end
+      local qok, query = pcall(vim.treesitter.query.parse, lang, WORD_QUERIES[lang] or WORD_QUERIES.default)
+      if not qok then
+        return
+      end
+      local key = lang == "markdown_inline" and "prose" or lang
+      for _, node in query:iter_captures(tree:root(), buf) do
+        for word in vim.treesitter.get_node_text(node, buf):gmatch("[%w_][%w_%-]*") do
+          where[word] = where[word] or {}
+          where[word][key] = true
+        end
+      end
+    end)
+  end
+  word_cache[buf] = { tick = tick, time = now, where = where }
+  return where
 end
 
 return M
