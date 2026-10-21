@@ -1,0 +1,20 @@
+{
+  "python cell": {
+    "prefix": "```python",
+    "description": "Python code cell (notebooks opened by jupytext use plain fences)",
+    "body": [
+      "```python",
+      "$0",
+      "```"
+    ]
+  },
+  "R cell": {
+    "prefix": "```r",
+    "description": "R code cell",
+    "body": [
+      "```r",
+      "$0",
+      "```"
+    ]
+  }
+}

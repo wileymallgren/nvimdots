@@ -36,3 +36,15 @@ vim.o.smartcase = true
 -- Configure how new splits should be opened
 vim.o.splitright = true
 vim.o.splitbelow = true
+
+-- Spell checking in prose files. Treesitter limits it to text and comments,
+-- so code chunks, inline code and maths aren't flagged. Corrections also
+-- show up in completion (lua/plugins/completion.lua).
+vim.o.spelllang = "en_us"
+vim.api.nvim_create_autocmd("FileType", {
+  group = vim.api.nvim_create_augroup("ProseSpell", { clear = true }),
+  pattern = { "markdown", "rmd", "quarto" },
+  callback = function()
+    vim.opt_local.spell = true
+  end,
+})

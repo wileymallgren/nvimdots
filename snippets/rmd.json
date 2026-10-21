@@ -1,0 +1,48 @@
+{
+  "R chunk": {
+    "prefix": "```{r",
+    "description": "R chunk with a label",
+    "body": [
+      "```{r ${1:label}}",
+      "$0",
+      "```"
+    ]
+  },
+  "python chunk": {
+    "prefix": "```{python",
+    "description": "Python chunk",
+    "body": [
+      "```{python}",
+      "$0",
+      "```"
+    ]
+  },
+  "figure chunk": {
+    "prefix": "```{r",
+    "description": "R chunk for a figure (label, caption, size)",
+    "body": [
+      "```{r ${1:label}, fig.cap = \"${2:caption}\", fig.width = ${3:7}, fig.height = ${4:4}}",
+      "$0",
+      "```"
+    ]
+  },
+  "inline R": {
+    "prefix": "`r",
+    "description": "Inline R code",
+    "body": "`r $1`$0"
+  },
+  "header": {
+    "prefix": "---",
+    "description": "YAML header with today's date",
+    "body": [
+      "---",
+      "title: \"${1:$TM_FILENAME_BASE}\"",
+      "author: \"${2:Author}\"",
+      "date: \"$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE\"",
+      "output: ${3:html_document}",
+      "---",
+      "",
+      "$0"
+    ]
+  }
+}

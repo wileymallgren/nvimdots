@@ -566,6 +566,19 @@ function M.masked_lines(buf)
   return select(3, get_segs(buf))
 end
 
+-- Is the character at (row, col), both 1-based, inside maths? The opening
+-- delimiter counts, the closing one doesn't, so the cursor just after `$x$`
+-- is back in prose. Shared with lua/config/cmp-context.lua.
+function M.in_math(buf, row, col)
+  local p = { row, col }
+  for _, r in ipairs(select(2, get_segs(buf))) do
+    if before(r.s, p) and before(p, r.e) and not (p[1] == r.e[1] and p[2] == r.e[2]) then
+      return true
+    end
+  end
+  return false
+end
+
 -- Inline maths on one (masked) line, by the same rules as the highlighting:
 -- { { s =, e =, text = }, ... } for $...$ and \(...\), e exclusive. Display
 -- maths and environments are skipped over.
