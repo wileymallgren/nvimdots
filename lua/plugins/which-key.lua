@@ -48,6 +48,8 @@ return {
         { "<leader>cd", icon = { icon = "", color = "blue" } },
         { "<leader>cc", icon = { icon = "", color = "cyan" } },
         { "<leader>cv", icon = { cat = "filetype", name = "csv" } },
+        { "<leader>ca", icon = { icon = "󰁨", color = "yellow" } },
+        { "<leader>cA", icon = { icon = "󰁨", color = "orange" } },
         { "<leader>a", icon = { icon = "", color = "purple" } },
         { "<leader>A", icon = { icon = "", color = "purple" } },
       },
