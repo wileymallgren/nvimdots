@@ -5,7 +5,7 @@ local function region()
 end
 
 -- Sources for each kind of region; anything else gets the default list
-local DEFAULT_SOURCES = { "lsp", "path", "snippets", "buffer", "codeium" }
+local DEFAULT_SOURCES = { "lsp", "path", "snippets", "buffer", "columns", "codeium" }
 local SOURCES_BY_REGION = {
   -- language-server items (keywords, builtins, members) are noise here
   comment = { "buffer", "path", "spell", "codeium" },
@@ -131,6 +131,11 @@ local function snippets_as_completions(ctx, items)
           local first = text:match("^[^\n]*")
           item.label = first ~= text and first .. " …" or first
           item.filterText = first:sub(n - #keyword + 1)
+          -- Matched more than the word being typed (`# App`, ```{r): a
+          -- strong hint, so rank it above Codeium and plain words
+          if n > #keyword then
+            item.score_offset = (item.score_offset or 0) + 3
+          end
           item.textEdit = {
             newText = body,
             range = { start = { line = row, character = col - n }, ["end"] = { line = row, character = col } },
@@ -156,6 +161,55 @@ local function lsp_snippet_is_completion(ctx, item)
   return #keyword > 0
     and not (item.additionalTextEdits and #item.additionalTextEdits > 0)
     and starts_with(expanded(body), keyword)
+end
+
+-- Argument names (`header =`) already written in this call aren't offered
+-- again: read.csv(f, header = TRUE, he| doesn't suggest `header =`
+local function without_given_args(items)
+  local has_args = false
+  for _, item in ipairs(items) do
+    if item.label:match("=%s*$") then
+      has_args = true
+      break
+    end
+  end
+  if not has_args then
+    return items
+  end
+  local given = require("config.cmp-context").given_args()
+  if next(given) == nil then
+    return items
+  end
+  return vim.tbl_filter(function(item)
+    local name = item.label:match("^([%w._]+)%s*=%s*$")
+    return not (name and given[name])
+  end, items)
+end
+
+-- In Rmd / Quarto / notebooks, buffer words follow the region: an R chunk
+-- gets words used as R code (not "the" or "results" from the text around
+-- it), and prose gets words used in prose (not df_clean or geom_point).
+-- Words seen nowhere yet (just typed) are always kept. After df$ there
+-- are no buffer words at all, only the columns.
+local function region_words(ctx, items)
+  local known = require("config.cmp-columns").known_here(ctx)
+  if known and known.only then
+    return {} -- df$ / df["…"]: only columns fit (cmp-columns.lua)
+  end
+  local buf = vim.api.nvim_get_current_buf()
+  if not require("config.rmd-latex-hl").handles(buf) then
+    return items
+  end
+  local r = region()
+  local want = r.kind == "prose" and "prose" or r.kind == "code" and r.lang or nil
+  if not want then
+    return items
+  end
+  local where = require("config.cmp-context").word_langs(buf)
+  return vim.tbl_filter(function(item)
+    local seen = where[item.label]
+    return seen == nil or seen[want] == true
+  end, items)
 end
 
 -- Buffer words come from every loaded file buffer, not only visible ones
@@ -263,6 +317,10 @@ return {
             -- read.csv("…"): file names; lsp stays for Python Literal/dict keys
             return { "file_args", "lsp", "codeium" }
           end
+          -- ![](…) / [text](…) and bibliography: in a YAML header
+          if (r.kind == "prose" or r.kind == "yaml") and require("config.cmp-context").file_arg() then
+            return { "file_args" }
+          end
           return SOURCES_BY_REGION[r.kind] or DEFAULT_SOURCES
         end,
         per_filetype = {
@@ -277,6 +335,16 @@ return {
                 return lsp_snippet_is_completion(ctx, item)
               end, drop_r_duplicates(items))
               local private_ok = ctx.get_keyword():sub(1, 1) == "_"
+              items = without_given_args(items)
+              -- The columns source (cmp-columns.lua) knows this data frame:
+              -- don't list its columns twice, and after df$ / in df["…"]
+              -- drop the server's guesses
+              local known = require("config.cmp-columns").known_here(ctx)
+              if known then
+                items = vim.tbl_filter(function(item)
+                  return not known.only and not known.names[item.label]
+                end, items)
+              end
               for _, item in ipairs(items) do
                 if not private_ok and item.label:sub(1, 1) == "_" then
                   item.score_offset = (item.score_offset or 0) - 10
@@ -362,10 +430,19 @@ return {
           },
           buffer = {
             opts = { get_bufnrs = file_buffers },
+            transform_items = region_words,
+          },
+          -- df$col, df["col"], select(col) from the files the buffer reads
+          columns = {
+            name = "Columns",
+            module = "config.cmp-columns",
+            score_offset = 5,
           },
           codeium = {
             name = "Codeium",
-            module = "codeium.blink", -- Uses the fast native blink wrapper
+            -- codeium.nvim's blink source, plus the chunk outputs molten
+            -- shows, so prose about a chunk can use its results
+            module = "config.cmp-codeium",
             -- Only ask Codeium in real file buffers. Special buffers like
             -- oil:///path/ make the Codeium server fail with
             -- "empty share name for UNC-like path".

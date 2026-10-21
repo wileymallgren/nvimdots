@@ -1,6 +1,7 @@
 -- blink.cmp source: file names inside the file argument of read.csv("…"),
 -- readRDS("…"), pd.read_csv("…"), open("…") and similar (the list is in
--- lua/config/cmp-context.lua). Only files with the extensions that function
+-- lua/config/cmp-context.lua), in markdown links / images, and in YAML
+-- header keys like bibliography:. Only files with the extensions that function
 -- reads are offered; folders are always listed so you can go down into them.
 -- Unlike blink's own path source, it works before any `/` has been typed.
 
