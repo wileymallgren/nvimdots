@@ -1,0 +1,27 @@
+{
+  "ggplot": {
+    "prefix": "ggplot",
+    "description": "ggplot skeleton",
+    "body": ["ggplot(${1:df}, aes(x = ${2:x}, y = ${3:y})) +", "  ${4:geom_point()}$0"]
+  },
+  "group_by + summarise": {
+    "prefix": "group_by",
+    "description": "group_by() |> summarise()",
+    "body": ["group_by(${1:group}) |>", "  summarise(${2:n} = ${3:n()}, .groups = \"drop\")$0"]
+  },
+  "case_when": {
+    "prefix": "mutate",
+    "description": "mutate() with case_when()",
+    "body": [
+      "mutate(${1:col} = case_when(",
+      "  ${2:condition} ~ ${3:value},",
+      "  .default = ${4:value}",
+      "))$0"
+    ]
+  },
+  "pivot_longer": {
+    "prefix": "pivot_longer",
+    "description": "pivot_longer()",
+    "body": "pivot_longer(cols = ${1:cols}, names_to = \"${2:name}\", values_to = \"${3:value}\")$0"
+  }
+}

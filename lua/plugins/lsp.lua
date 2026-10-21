@@ -219,7 +219,7 @@ return {
       vim.lsp.config("lua_ls", {
         settings = {
           Lua = {
-            diagnostics = { globals = { "vim" } },
+            -- `vim` and plugin types come from lazydev.nvim
             workspace = { checkThirdParty = false },
           },
         },
@@ -247,6 +247,19 @@ return {
           end
           if not wrap("write_error") then
             wrap("_write_error")
+          end
+        end,
+      })
+
+      -- gd: LSP go-to-definition where the server has it. Neovim maps grr /
+      -- gri / grt / gO to the LSP, but leaves gd as Vim's search for the
+      -- first use of the word in the file.
+      vim.api.nvim_create_autocmd("LspAttach", {
+        group = vim.api.nvim_create_augroup("LspGotoDefinition", { clear = true }),
+        callback = function(ev)
+          local client = vim.lsp.get_client_by_id(ev.data.client_id)
+          if client and client:supports_method("textDocument/definition") then
+            vim.keymap.set("n", "gd", vim.lsp.buf.definition, { buffer = ev.buf, desc = "Go to definition (LSP)" })
           end
         end,
       })

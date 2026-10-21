@@ -1,6 +1,30 @@
-local function tb(name, opts)
+-- Root of the project the current file (or oil directory) is in: the
+-- nearest folder going up with one of these. Falls back to Neovim's cwd,
+-- e.g. on the dashboard.
+local ROOT_MARKERS = { ".git", ".here", "DESCRIPTION", "pyproject.toml", "_quarto.yml" }
+local function project_root()
+  local source = vim.api.nvim_buf_get_name(0)
+  if vim.bo.filetype == "oil" then
+    source = require("oil").get_current_dir() or ""
+  elseif vim.bo.buftype ~= "" then
+    source = ""
+  end
+  local root = source ~= ""
+    and vim.fs.root(source, function(name)
+      return vim.tbl_contains(ROOT_MARKERS, name) or name:match("%.Rproj$") ~= nil
+    end)
+  return root or vim.fn.getcwd()
+end
+
+-- Telescope builtin `name`. With `rooted`, it searches from project_root()
+-- (worked out when the key is pressed, not when the config loads).
+local function tb(name, opts, rooted)
   return function()
-    require("telescope.builtin")[name](opts)
+    local o = vim.deepcopy(opts or {})
+    if rooted then
+      o.cwd = o.cwd or project_root()
+    end
+    require("telescope.builtin")[name](o)
   end
 end
 
@@ -53,11 +77,17 @@ return {
     { "nvim-telescope/telescope-fzf-native.nvim", build = "make" },
   },
   keys = {
-    { "<leader>ff", tb("find_files"), desc = "Find files" },
-    { "<leader>fg", tb("live_grep"), desc = "Live grep" },
-    { "<leader>fb", tb("buffers"), desc = "Find buffers" },
-    { "<leader>fw", tb("grep_string"), desc = "Grep word under cursor" },
-    { "<leader>fr", tb("oldfiles"), desc = "Recent files" },
+    { "<leader>ff", tb("find_files", nil, true), desc = "Find files (project)" },
+    { "<leader>fg", tb("live_grep", nil, true), desc = "Live grep (project)" },
+    -- Most recently used first, without the one you're in: <CR> = last buffer
+    { "<leader>fb", tb("buffers", { sort_mru = true, ignore_current_buffer = true }), desc = "Find buffers" },
+    -- In visual mode, telescope greps the (charwise) selection instead
+    { "<leader>fw", tb("grep_string", nil, true), mode = { "n", "x" }, desc = "Grep word / selection (project)" },
+    { "<leader>fr", tb("oldfiles", nil, true), desc = "Recent files (project)" },
+    { "<leader>fR", tb("oldfiles"), desc = "Recent files (everywhere)" },
+    { "<leader>fs", tb("lsp_document_symbols"), desc = "Symbols in this file" },
+    { "<leader>fS", tb("lsp_dynamic_workspace_symbols"), desc = "Symbols in the project" },
+    { "<leader>f<CR>", tb("resume"), desc = "Resume last picker" },
     {
       "<leader>fd",
       function()

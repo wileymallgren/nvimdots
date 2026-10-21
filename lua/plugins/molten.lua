@@ -256,15 +256,22 @@ local function eval_chunk(c, kernel)
   vim.cmd("MoltenEvaluateVisual " .. kernel)
 end
 
-local function run_chunk()
+-- Run the chunk under the cursor. With no kernel for its language yet, one
+-- is started first (molten queues the code until the kernel is ready).
+-- With `advance`, the cursor then moves into the next chunk, like
+-- Shift-Enter in Jupyter.
+local function run_chunk(advance)
   local cur = vim.fn.line(".")
-  for _, c in ipairs(find_chunks()) do
+  local chunks = find_chunks()
+  for i, c in ipairs(chunks) do
     if cur >= c.s and cur <= c.e then
-      local kernels = kernels_or_warn()
-      if not kernels then
-        return
+      local kernel = buffer_kernels()[c.lang]
+      local name = not kernel and LANGS[c.lang] and LANGS[c.lang].kernel(vim.api.nvim_get_current_buf())
+      if name then
+        vim.notify(("Molten: starting %s kernel"):format(name))
+        vim.cmd("MoltenInit " .. name)
+        kernel = buffer_kernels()[c.lang]
       end
-      local kernel = kernels[c.lang]
       if not kernel then
         vim.notify(
           ("No %s kernel running: use <localleader>mi first"):format(c.lang ~= "" and c.lang or "matching"),
@@ -275,6 +282,14 @@ local function run_chunk()
       local view = vim.fn.winsaveview()
       eval_chunk(c, kernel)
       vim.fn.winrestview(view)
+      if advance then
+        local nxt = chunks[i + 1]
+        if nxt then
+          vim.api.nvim_win_set_cursor(0, { math.min(nxt.s + 1, nxt.e), 0 })
+        else
+          vim.notify("Molten: that was the last chunk")
+        end
+      end
       return
     end
   end
@@ -413,7 +428,17 @@ return {
             vim.keymap.set("n", lhs, rhs, { buffer = ev.buf, silent = true, desc = desc })
           end
           map("<localleader>mi", init_kernels, "Molten: start kernel(s) for this buffer's chunks")
-          map("<localleader>mc", run_chunk, "Molten: run current chunk")
+          map("<localleader>mc", function()
+            run_chunk()
+          end, "Molten: run current chunk")
+          map("<localleader>mn", function()
+            run_chunk(true)
+          end, "Molten: run chunk, go to next")
+          -- Jupyter's Shift-Enter (needs a terminal that sends <S-CR>
+          -- distinctly: kitty, WezTerm, Ghostty)
+          map("<S-CR>", function()
+            run_chunk(true)
+          end, "Molten: run chunk, go to next")
           map("<localleader>ma", function()
             run_chunks()
           end, "Molten: run all chunks")

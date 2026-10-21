@@ -1,0 +1,12 @@
+{
+  "data imports": {
+    "prefix": "import",
+    "description": "numpy / pandas / matplotlib imports",
+    "body": ["import numpy as np", "import pandas as pd", "import matplotlib.pyplot as plt", "$0"]
+  },
+  "subplots": {
+    "prefix": "fig",
+    "description": "Figure and axes",
+    "body": ["fig, ax = plt.subplots(figsize=(${1:8}, ${2:5}))", "$0", "plt.show()"]
+  }
+}

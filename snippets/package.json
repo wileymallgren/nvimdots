@@ -1,0 +1,12 @@
+{
+  "name": "personal-snippets",
+  "description": "Own snippets, read by blink.cmp (lua/plugins/completion.lua). In an Rmd, R chunks get r.json and the prose gets rmd.json.",
+  "contributes": {
+    "snippets": [
+      { "language": ["r"], "path": "./r.json" },
+      { "language": ["python"], "path": "./python.json" },
+      { "language": ["rmd", "quarto"], "path": "./rmd.json" },
+      { "language": ["markdown"], "path": "./markdown.json" }
+    ]
+  }
+}
