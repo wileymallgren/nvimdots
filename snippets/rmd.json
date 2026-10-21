@@ -44,5 +44,15 @@
       "",
       "$0"
     ]
+  },
+  "appendix code": {
+    "prefix": "# Appendix",
+    "description": "Every chunk's code shown again (not run) as an appendix",
+    "body": [
+      "# Appendix Code",
+      "```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}",
+      "```",
+      "$0"
+    ]
   }
 }

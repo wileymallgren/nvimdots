@@ -89,7 +89,8 @@ end
 -- Snippets only complete what you're typing, they never turn an
 -- abbreviation into something else: `ggp` offers `ggplot(df, aes(...)) +`,
 -- but `fun` no longer becomes `name <- function(...)`. A snippet is offered
--- when the text it inserts starts with the text before the cursor, and is
+-- when the text it inserts starts with (the end of) the text before the
+-- cursor, and is
 -- listed by that text instead of by its trigger. Snippets that start with a
 -- name you'd choose yourself (`${1:name} <- ...`) are left out: they would
 -- "complete" any word that happens to match the placeholder.
@@ -114,7 +115,7 @@ end
 
 local function snippets_as_completions(ctx, items)
   local row, col = ctx.cursor[1] - 1, ctx.cursor[2]
-  local run = ctx.line:sub(1, col):match("%S*$") -- everything typed since the last space
+  local run = ctx.line:sub(1, col):match("^%s*(.-)$") -- the line so far, minus indentation
   local keyword = ctx.get_keyword()
   local out = {}
   for _, item in ipairs(items) do
@@ -122,8 +123,8 @@ local function snippets_as_completions(ctx, items)
     local text = expanded(body)
     if not body:match("^%$") then
       -- Longest piece of what was typed that the snippet's text starts with:
-      -- at least the current word, plus non-word characters before it, so
-      -- ```{r and --- work too
+      -- at least the current word, plus whatever comes before it, so
+      -- ```{r, --- and "# Appendix" work too
       for n = #run, math.max(#keyword, 1), -1 do
         local typed = run:sub(-n)
         if starts_with(text, typed) then
@@ -213,7 +214,19 @@ return {
           auto_show = true,
           auto_show_delay_ms = 200,
         },
-        ghost_text = { enabled = true },
+        -- Ghost text (the rest of the item drawn inline and on the lines
+        -- below) only for multi-line snippets, where seeing what the whole
+        -- block will look like before accepting it is worth the clutter
+        ghost_text = {
+          enabled = function()
+            local item = require("blink.cmp").get_selected_item()
+            local text = item and (item.textEdit and item.textEdit.newText or item.insertText)
+            return item ~= nil
+              and item.kind == require("blink.cmp.types").CompletionItemKind.Snippet
+              and text ~= nil
+              and text:find("\n") ~= nil
+          end,
+        },
         trigger = {
           show_on_keyword = true,
           show_on_trigger_character = true,
@@ -235,6 +248,7 @@ return {
             end,
           },
           list = { selection = { preselect = false } },
+          ghost_text = { enabled = false }, -- only for big snippets (above)
         },
       },
 
