@@ -225,11 +225,42 @@ return {
         },
       })
 
+      -- In Rmd/qmd, languageserver lints the R chunks with every other line
+      -- blanked out, so everything after the last chunk looks like trailing
+      -- blank lines to lintr. Keep that lint only where the real buffer is
+      -- blank from that line to the end.
+      local function drop_false_trailing_blanks(uri, diags)
+        local buf = uri and vim.uri_to_bufnr(uri)
+        if not (buf and diags and vim.api.nvim_buf_is_loaded(buf)) then
+          return diags
+        end
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        return vim.tbl_filter(function(d)
+          if d.code ~= "trailing_blank_lines_linter" then
+            return true
+          end
+          for i = d.range.start.line + 1, #lines do
+            if not lines[i]:match("^%s*$") then
+              return false
+            end
+          end
+          return true
+        end, diags)
+      end
+
       -- Suppress the harmless INVALID_SERVER_MESSAGE / -32800 "Request cancelled"
       -- error the R language server sends when Neovim cancels a pending request
       -- (e.g. pressing G right after opening a large Rmd). Only this specific error
       -- is dropped; any other server error is still reported.
       vim.lsp.config("r_language_server", {
+        handlers = {
+          ["textDocument/publishDiagnostics"] = function(err, result, ctx)
+            if result then
+              result.diagnostics = drop_false_trailing_blanks(result.uri, result.diagnostics)
+            end
+            return vim.lsp.handlers["textDocument/publishDiagnostics"](err, result, ctx)
+          end,
+        },
         on_init = function(client)
           local function wrap(name)
             local orig = client[name]
