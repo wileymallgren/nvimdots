@@ -41,7 +41,7 @@ return {
         dashboard.button("m", "   Mason", "<cmd>Mason<CR>"),
         dashboard.button("t", "   ToggleTerm", "<cmd>ToggleTerm<CR>"),
         dashboard.button("g", "   LazyGit", "<cmd>LazyGit<CR>"),
-        dashboard.button("b", "  󰣀 Remote Connect", "<cmd>RemoteStart<CR>"),
+        dashboard.button("s", "  󰣀 Remote Connect", "<cmd>RemoteStart<CR>"),
         dashboard.button("q", "  󰈆 Quit", "<cmd>qa<CR>"),
       }
 
