@@ -64,10 +64,8 @@ M.file_functions = {
 }
 
 -- dplyr/tidyr verbs whose arguments are columns of the data frame (first
--- argument or piped in). Also R.nvim's fun_data_1 (lua/plugins/R.lua) and
--- the columns source (lua/config/cmp-columns.lua).
+-- argument or piped in). Used by the columns source (lua/config/cmp-columns.lua).
 M.data_verbs = {
-  -- R.nvim's own four first: it merges this list into its default by position
   "select",
   "rename",
   "mutate",

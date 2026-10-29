@@ -5,7 +5,7 @@ local function region()
 end
 
 -- Sources for each kind of region; anything else gets the default list
-local DEFAULT_SOURCES = { "lsp", "path", "snippets", "buffer", "columns", "codeium" }
+local DEFAULT_SOURCES = { "lsp", "kernel", "path", "snippets", "buffer", "columns", "codeium" }
 local SOURCES_BY_REGION = {
   -- language-server items (keywords, builtins, members) are noise here
   comment = { "buffer", "path", "spell", "codeium" },
@@ -56,11 +56,12 @@ local function codeium_eat_closers(ctx, items)
   return items
 end
 
--- R code gets completions from both r_language_server and R.nvim's r_ls,
--- mostly the same names twice (`file` and `file = `). Keep r_ls's copy (it
--- knows the running R session and its data frames) and drop
--- r_language_server's item for any name r_ls also returned.
-local function drop_r_duplicates(items)
+-- With a kernel running, R/Python code gets completions from both the
+-- language server and the kernel (lua/config/kernel/complete.lua), mostly
+-- the same names twice (`file` and `file = `). Keep the kernel's copy (it
+-- knows the running session and its data frames) and drop the language
+-- server's item for any name the kernel also returned.
+local function drop_kernel_duplicates(items)
   local names = {} -- client id -> name
   local function client(item)
     if names[item.client_id] == nil then
@@ -72,17 +73,17 @@ local function drop_r_duplicates(items)
   local function key(label)
     return (label:gsub("%s*=%s*$", ""):gsub("%(.*$", ""))
   end
-  local from_r_ls = {}
+  local from_kernel = {}
   for _, item in ipairs(items) do
-    if client(item) == "r_ls" then
-      from_r_ls[key(item.label)] = true
+    if item.source_id == "kernel" then
+      from_kernel[key(item.label)] = true
     end
   end
-  if next(from_r_ls) == nil then
+  if next(from_kernel) == nil then
     return items
   end
   return vim.tbl_filter(function(item)
-    return not (client(item) == "r_language_server" and from_r_ls[key(item.label)])
+    return not (item.source_id == "lsp" and client(item) and from_kernel[key(item.label)])
   end, items)
 end
 
@@ -307,6 +308,9 @@ return {
       },
 
       sources = {
+        transform_items = function(_, items)
+          return drop_kernel_duplicates(items)
+        end,
         -- Chosen by where the cursor is, so an R chunk in an Rmd completes
         -- R while the prose around it completes words.
         default = function()
@@ -333,7 +337,7 @@ return {
             transform_items = function(ctx, items)
               items = vim.tbl_filter(function(item)
                 return lsp_snippet_is_completion(ctx, item)
-              end, drop_r_duplicates(items))
+              end, items)
               local private_ok = ctx.get_keyword():sub(1, 1) == "_"
               items = without_given_args(items)
               -- The columns source (cmp-columns.lua) knows this data frame:
@@ -432,6 +436,14 @@ return {
             opts = { get_bufnrs = file_buffers },
             transform_items = region_words,
           },
+          -- Objects, columns and arguments from the running R / Python kernel
+          kernel = {
+            name = "Kernel",
+            module = "config.kernel.complete",
+            score_offset = 3,
+            async = true,
+            timeout_ms = 500,
+          },
           -- df$col, df["col"], select(col) from the files the buffer reads
           columns = {
             name = "Columns",
@@ -440,8 +452,9 @@ return {
           },
           codeium = {
             name = "Codeium",
-            -- codeium.nvim's blink source, plus the chunk outputs molten
-            -- shows, so prose about a chunk can use its results
+            -- codeium.nvim's blink source, plus the chunk outputs shown
+            -- inline (lua/config/kernel/inline.lua), so prose about a chunk
+            -- can use its results
             module = "config.cmp-codeium",
             -- Only ask Codeium in real file buffers. Special buffers like
             -- oil:///path/ make the Codeium server fail with

@@ -1,12 +1,12 @@
 -- Open Jupyter notebooks (.ipynb) as markdown with ```python fences, and
 -- convert back on save. Being filetype markdown, notebooks get the same
--- features as R Markdown: molten chunk keymaps (lua/plugins/molten.lua),
+-- features as R Markdown: running chunks with inline output (lua/config/kernel/),
 -- LaTeX highlighting and previews, <localleader>kk to execute + export HTML.
 --   :NewNotebook {name}   create and open an empty notebook
 --
 -- Needs the `jupytext` CLI on PATH (macOS: brew install jupytext).
--- Saving keeps the outputs already in the .ipynb; molten writes fresh ones
--- after each save while a kernel is running.
+-- The outputs saved in the .ipynb show under their chunks when it opens, and
+-- saving writes the current ones into it (lua/config/kernel/ipynb.lua).
 
 -- jupytext can only open a valid notebook, so new ones start from this.
 local TEMPLATE = [[
