@@ -69,10 +69,55 @@ return {
         vim.o.guicursor = "n:HiddenCursor"
       end
 
+      -- The tabline (always shown, see lua/plugins/lualine.lua) would only say
+      -- "1 [No Name]" here, so hide it while the dashboard is all there is:
+      -- one tab whose windows, floats aside (Telescope, which-key, ...),
+      -- all show it. Checked whenever windows or buffers change.
+      local saved_showtabline
+      local function dashboard_alone()
+        if #vim.api.nvim_list_tabpages() ~= 1 then
+          return false
+        end
+        local seen = false
+        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.api.nvim_win_get_config(win).relative == "" then
+            if vim.bo[vim.api.nvim_win_get_buf(win)].filetype ~= "alpha" then
+              return false
+            end
+            seen = true
+          end
+        end
+        return seen
+      end
+      local function update_tabline()
+        if dashboard_alone() then
+          if vim.o.showtabline ~= 0 then
+            saved_showtabline = vim.o.showtabline
+            vim.o.showtabline = 0
+          end
+        elseif saved_showtabline then
+          vim.o.showtabline = saved_showtabline
+          saved_showtabline = nil
+        end
+      end
+      vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "WinEnter", "TabEnter", "TabNew", "FileType" }, {
+        group = alpha_cursor_grp,
+        callback = update_tabline,
+      })
+      vim.api.nvim_create_autocmd("WinClosed", {
+        group = alpha_cursor_grp,
+        callback = function()
+          vim.schedule(update_tabline) -- once the window is gone
+        end,
+      })
+
       vim.api.nvim_create_autocmd("User", {
         pattern = "AlphaReady",
         group = alpha_cursor_grp,
-        callback = hide_cursor,
+        callback = function()
+          hide_cursor()
+          update_tabline()
+        end,
       })
 
       vim.api.nvim_create_autocmd("FileType", {
@@ -88,7 +133,7 @@ return {
             callback = hide_cursor,
           })
 
-          -- 2. Restore cursor whenever we look away from the dashboard
+          -- 2. Restore it whenever we look away from the dashboard
           vim.api.nvim_create_autocmd("BufLeave", {
             group = alpha_cursor_grp,
             buffer = 0,

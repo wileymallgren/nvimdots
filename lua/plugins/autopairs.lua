@@ -2,7 +2,11 @@ return {
   {
     "windwp/nvim-autopairs",
     event = "InsertEnter",
-    opts = {},
+    opts = {
+      -- the defaults, plus the kernel console (lua/config/kernel/console.lua),
+      -- where <CR> runs the line: a paired "{}" would end the expression early
+      disable_filetype = { "TelescopePrompt", "spectre_panel", "snacks_picker_input", "kernel_console" },
+    },
     config = function(_, opts)
       local npairs = require("nvim-autopairs")
       local cond = require("nvim-autopairs.conds")

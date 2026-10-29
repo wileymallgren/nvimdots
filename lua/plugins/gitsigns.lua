@@ -8,7 +8,6 @@
 --   <leader>gp     preview hunk inline
 --   <leader>gb     blame for the current line (full commit message)
 --   <leader>gB     toggle inline blame on the current line
---   <leader>gd     diff the file against the index
 --   ih             (operator / visual) select hunk, e.g. dih, yih, vih
 return {
   "lewis6991/gitsigns.nvim",
@@ -53,7 +52,6 @@ return {
         gs.blame_line({ full = true })
       end, "Blame line")
       map("n", "<leader>gB", gs.toggle_current_line_blame, "Toggle inline blame")
-      map("n", "<leader>gd", gs.diffthis, "Diff against index")
 
       -- Text object
       map({ "o", "x" }, "ih", gs.select_hunk, "Select git hunk")

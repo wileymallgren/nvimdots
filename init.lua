@@ -9,3 +9,5 @@ require("config.latex-hl").setup()
 require("config.rmd-latex-hl").setup()
 require("config.rmd-knit").setup()
 require("config.markdown-toc").setup()
+require("config.kernel").setup() -- R / Python: console, sending code, inline chunk output
+require("config.chunk-hl").setup() -- code chunk background and language label

@@ -1,5 +1,6 @@
 -- Project Python environment helpers, shared by the LSP config (basedpyright's
--- interpreter), molten (<localleader>mi) and notebook knitting (<localleader>kk).
+-- interpreter), the Python kernel (lua/config/kernel/session.lua) and notebook
+-- knitting (<localleader>kk).
 --
 -- The project's Python is $VIRTUAL_ENV if one is active, otherwise the nearest
 -- .venv above the file. Its Jupyter kernel is registered on first use as
@@ -63,7 +64,7 @@ end
 
 -- Name of the Jupyter kernel to use for Python in buffer `buf`, registering
 -- the project venv as a kernel if needed. nil if nothing suitable was found
--- (the caller then lets molten ask).
+-- (the caller then says so).
 function M.kernel(buf)
   local file = vim.api.nvim_buf_get_name(buf or 0)
   local kernels = M.kernelspecs(true)

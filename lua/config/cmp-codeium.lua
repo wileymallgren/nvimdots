@@ -1,6 +1,6 @@
 -- blink.cmp source: Codeium, like codeium.nvim's own `codeium.blink`, but in
 -- R Markdown / Quarto / markdown notebooks the text sent to Codeium also
--- holds each chunk's output (what molten shows under it as virtual text),
+-- holds each chunk's output (shown under it by lua/config/kernel/inline.lua),
 -- placed below the chunk the way a knitted .md has it:
 --
 --   ```{r}
@@ -13,9 +13,8 @@
 --
 --   The mean mpg is |      <- Codeium can now suggest "21.3"
 --
--- Only the request changes; the buffer is never touched. Molten shows at
--- most vim.g.molten_virt_text_max_lines (12) lines of each output, so
--- that's what Codeium gets too.
+-- Only the request changes; the buffer is never touched. Each output is
+-- cut to MAX_LINES_PER_OUTPUT lines (the inline view shows 20 too).
 
 local enums = require("codeium.enums")
 local util = require("codeium.util")
@@ -34,32 +33,22 @@ M.enabled = base.enabled
 M.get_trigger_characters = base.get_trigger_characters
 M.resolve = base.resolve
 
--- Molten's outputs in `buf`: { { row = closing-fence row (0-based), lines } }
-local function molten_outputs(buf)
-  local ns = vim.api.nvim_get_namespaces()["molten-extmarks"]
-  if not ns or not require("config.rmd-latex-hl").handles(buf) then
+-- Chunk outputs in `buf` (lua/config/kernel/inline.lua), in buffer order:
+-- { { row = closing-fence row (0-based), lines } }
+local function chunk_outputs(buf)
+  if not require("config.rmd-latex-hl").handles(buf) then
     return {}
   end
   local outputs = {}
-  for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, 0, -1, { details = true })) do
-    local virt = mark[4].virt_lines
-    if virt then
-      local lines = {}
-      for i, chunks in ipairs(virt) do
-        local text = table.concat(vim.tbl_map(function(c)
-          return c[1]
-        end, chunks))
-        -- skip the "Out[2]: ✓ Done 0.0s" header and the "󰁅 3 More Lines" marker
-        if not (i == 1 and text:match("^Out%[")) and not text:match("More Lines%s*$") then
-          lines[#lines + 1] = (text:gsub("%s+$", ""))
-        end
-      end
-      while #lines > 0 and lines[#lines] == "" do
-        lines[#lines] = nil
-      end
-      if #lines > 0 then
-        outputs[#outputs + 1] = { row = mark[2], lines = vim.list_slice(lines, 1, MAX_LINES_PER_OUTPUT) }
-      end
+  for _, o in ipairs(require("config.kernel.inline").outputs(buf)) do
+    local lines = vim.tbl_map(function(l)
+      return (l:gsub("%s+$", ""))
+    end, o.lines)
+    while #lines > 0 and lines[#lines] == "" do
+      lines[#lines] = nil
+    end
+    if #lines > 0 then
+      outputs[#outputs + 1] = { row = o.row, lines = vim.list_slice(lines, 1, MAX_LINES_PER_OUTPUT) }
     end
   end
   table.sort(outputs, function(a, b)
@@ -72,7 +61,7 @@ end
 -- and how many lines and bytes were inserted above `cursor_row` (0-based).
 local function with_outputs(buf, lines, cursor_row, line_ending_len)
   local out, shift, shift_bytes, total = {}, 0, 0, 0
-  local outputs, next_output = molten_outputs(buf), 1
+  local outputs, next_output = chunk_outputs(buf), 1
   for i, line in ipairs(lines) do
     out[#out + 1] = line
     local o = outputs[next_output]

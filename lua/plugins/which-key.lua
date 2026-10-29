@@ -22,8 +22,21 @@ return {
         { "<leader>t", group = "Terminal", icon = { icon = "", color = "red" } },
         { "<leader>R", group = "Remote", icon = { icon = "", color = "blue" } },
         { "<leader>c", group = "Code / cwd", icon = { icon = "", color = "orange" } },
-        { "<localleader>m", group = "Molten (code chunks)", icon = { cat = "filetype", name = "r" } },
         { "<localleader>k", group = "Knit", icon = { cat = "extension", name = "rmd" } },
+        -- R / Python kernels (lua/config/kernel/); only shown in buffers that
+        -- have these keys
+        {
+          mode = { "n", "v" },
+          icon = { cat = "filetype", name = "r" },
+          { "<localleader>m", group = "Chunks: run / outputs" },
+          { "<localleader>r", group = "Kernel, console & objects" },
+          { "<localleader>s", group = "Send selection" },
+          { "<localleader>c", group = "Run chunk(s)" },
+          { "<localleader>f", group = "Send function" },
+          { "<localleader>p", group = "Send paragraph" },
+          { "<localleader>a", group = "Send / run all" },
+          { "<localleader>g", group = "Go to chunk" },
+        },
         -- Render (lua/config/tex-preview.lua)
         { "<leader>rp", mode = { "n", "v" }, icon = { icon = "", color = "azure" } },
         { "<leader>rm", mode = { "n", "v" }, icon = { cat = "filetype", name = "markdown" } },

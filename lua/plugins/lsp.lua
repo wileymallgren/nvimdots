@@ -282,15 +282,19 @@ return {
         end,
       })
 
-      -- gd: LSP go-to-definition where the server has it. Neovim maps grr /
-      -- gri / grt / gO to the LSP, but leaves gd as Vim's search for the
-      -- first use of the word in the file.
+      -- gd: go to definition where the server has it (Neovim maps grr / gri /
+      -- grt / gO to the LSP, but leaves gd as Vim's search for the first use
+      -- of the word). For a variable assigned several times it goes to the
+      -- assignment in effect, and gd again steps to the earlier ones:
+      -- lua/config/goto-definition.lua.
       vim.api.nvim_create_autocmd("LspAttach", {
         group = vim.api.nvim_create_augroup("LspGotoDefinition", { clear = true }),
         callback = function(ev)
           local client = vim.lsp.get_client_by_id(ev.data.client_id)
           if client and client:supports_method("textDocument/definition") then
-            vim.keymap.set("n", "gd", vim.lsp.buf.definition, { buffer = ev.buf, desc = "Go to definition (LSP)" })
+            vim.keymap.set("n", "gd", function()
+              require("config.goto-definition").jump()
+            end, { buffer = ev.buf, desc = "Go to definition (LSP)" })
           end
         end,
       })

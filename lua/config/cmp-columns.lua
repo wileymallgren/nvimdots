@@ -6,8 +6,9 @@
 -- the header of data/cars.csv is read and `df$`, `df[["`, `df |> select(`,
 -- `ggplot(df, aes(`, `df["`, `df.groupby("` and `df.` offer its columns.
 -- Frames made from another one (`d2 <- df |> mutate(kpl = …)`) get its
--- columns, plus the ones mutate/summarise/rename create. With R running,
--- R.nvim's own column items replace these (see source:enabled()).
+-- columns, plus the ones mutate/summarise/rename create. With the R / Python
+-- kernel running (lua/config/kernel/), the columns come from the session
+-- instead, so every frame works, not only ones read from files.
 
 local context = require("config.cmp-context")
 
@@ -401,24 +402,72 @@ local function find_context(lang, before)
   end
 end
 
--- R code with R running gets the columns from R.nvim instead (it knows
--- every frame in the session, not only ones read from files)
 function source:enabled()
   local lang = context.region().lang
-  return lang == "python" or (lang == "r" and (vim.g.R_Nvim_status or 0) < 7)
+  return lang == "python" or lang == "r"
 end
 
 local EMPTY = { items = {}, is_incomplete_forward = false, is_incomplete_backward = false }
 
--- Columns for the cursor: cols, context, lang (or nil)
-local function lookup(ctx)
-  if not source.enabled() then
+-- Columns of `df` in the running kernel, cached briefly: "lang:df" -> { cols, time }
+local kernel_cache = {}
+local CACHE_MS = 2000
+
+local function cached_kernel_columns(lang, df)
+  local hit = kernel_cache[lang .. ":" .. df]
+  if hit and vim.uv.now() - hit.time < CACHE_MS then
+    return hit
+  end
+end
+
+-- cb(cols or nil): the kernel's columns of `df` (nil without an idle kernel
+-- for `lang`, or when `df` isn't a data frame there).
+local function kernel_columns(lang, df, cb)
+  local hit = cached_kernel_columns(lang, df)
+  if hit then
+    return cb(hit.cols)
+  end
+  local session = require("config.kernel.session")
+  local k = session.find(lang, 0)
+  if not k or k.state ~= "idle" then
+    return cb(nil)
+  end
+  local code = lang == "r" and ("if (is.data.frame(%s)) cat(names(%s), sep = '\\n')"):format(df, df)
+    or ("print('\\n'.join(map(str, %s.columns)))"):format(df)
+  session.eval(k, code, function(text, ok)
+    local cols
+    if ok and text:find("%S") then
+      cols = {}
+      for name in text:gmatch("[^\n]+") do
+        cols[#cols + 1] = { name = name }
+      end
+    end
+    kernel_cache[lang .. ":" .. df] = { cols = cols, time = vim.uv.now() }
+    cb(cols)
+  end)
+end
+
+-- The data frame context at the cursor: found, lang (or nil)
+local function context_at(ctx)
+  local lang = context.region(ctx.bufnr).lang
+  if lang ~= "r" and lang ~= "python" then
     return nil
   end
-  local lang = context.region(ctx.bufnr).lang
-  local before = ctx.line:sub(1, ctx.cursor[2])
-  local found = find_context(lang, before)
-  local cols = found and frames(ctx.bufnr, lang)[found.df]
+  local found = find_context(lang, ctx.line:sub(1, ctx.cursor[2]))
+  if found then
+    return found, lang
+  end
+end
+
+-- Columns for the cursor without waiting: the kernel's (if cached) or the
+-- files'. Returns cols, context, lang (or nil).
+local function lookup(ctx)
+  local found, lang = context_at(ctx)
+  if not found then
+    return nil
+  end
+  local hit = cached_kernel_columns(lang, found.df)
+  local cols = hit and hit.cols or frames(ctx.bufnr, lang)[found.df]
   if cols then
     return cols, found, lang
   end
@@ -440,10 +489,20 @@ function source.known_here(ctx)
 end
 
 function source:get_completions(ctx, callback)
-  local cols, found, lang = lookup(ctx)
-  if not cols then
+  local found, lang = context_at(ctx)
+  if not found then
     return callback(EMPTY)
   end
+  kernel_columns(lang, found.df, function(kernel_cols)
+    local cols = kernel_cols or frames(ctx.bufnr, lang)[found.df]
+    if not cols then
+      return callback(EMPTY)
+    end
+    source.items(ctx, cols, found, lang, callback)
+  end)
+end
+
+function source.items(ctx, cols, found, lang, callback)
   local row, col = ctx.cursor[1] - 1, ctx.cursor[2]
   local range = { start = { line = row, character = col - #found.partial }, ["end"] = { line = row, character = col } }
   local kind = require("blink.cmp.types").CompletionItemKind.Field
