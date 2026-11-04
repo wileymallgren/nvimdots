@@ -21,6 +21,7 @@
 -- output shown under the chunk (inline.lua):
 --   \mc \cc       run the chunk          \mn \cd <S-CR>  run it, go to the next
 --   \ma \aa       run all chunks         \mb \ch         run the chunks above
+--   \mA           run all R chunks, output in the console only (nothing inline)
 --   \mu           run the chunks above, then this one (only this one's output
 --                 shows under its chunk; the others show in the console)
 --   \mR           restart the kernel(s), then run the chunks above
@@ -171,6 +172,9 @@ function M.attach(buf)
   for _, lhs in ipairs({ "mb", "ch" }) do
     map("n", lhs, run_above, "Run chunks above the cursor")
   end
+  map("n", "mA", function()
+    inline.run_all_quiet("r")
+  end, "Run all R chunks (console only, nothing inline)")
   map("n", "mu", inline.run_upto_cursor, "Run chunks above + this one (output only here)")
   map("n", "mR", inline.restart_and_run_above, "Restart kernel(s), run the chunks above")
   map("n", "mI", function()

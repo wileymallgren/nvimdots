@@ -444,6 +444,27 @@ function M.run_all(upto, filter)
   vim.notify(("Running %d chunk(s)"):format(n))
 end
 
+-- Run every `lang` chunk (default R) with nothing shown inline: the output
+-- only goes to the console, and outputs already under chunks are left as
+-- they are. Skips eval=FALSE chunks. For getting the session's objects in
+-- place without filling the document.
+function M.run_all_quiet(lang)
+  lang = lang or "r"
+  local buf = vim.api.nvim_get_current_buf()
+  local k, n = nil, 0
+  for _, c in ipairs(chunks.find(buf)) do
+    if c.lang == lang and not chunks.is_skipped(c) and c.e - c.s >= 2 then
+      k = k or session.ensure(lang, buf)
+      if not k then
+        return
+      end
+      session.execute(k, table.concat(chunks.body(c, buf), "\n"), { source = "chunk" })
+      n = n + 1
+    end
+  end
+  vim.notify(("Running %d %s chunk(s), output in the console only"):format(n, lang == "r" and "R" or lang))
+end
+
 -- Run the chunks above the cursor's (shown only in the console: their inline
 -- outputs are left as they are), then the cursor's chunk with its output
 -- inline. Skips eval=FALSE chunks above, not the current one.

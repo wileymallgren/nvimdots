@@ -99,7 +99,7 @@ Leader is `<Space>`, local leader is `\`. Press `<Space>` and wait for which-key
 | `\l` `\d`, `\ss` `\sd`, `\pp` `\pd`, `\fc`, `\aa` | R / Python scripts and chunks: send statement (and move down), selection, paragraph, function, whole file (scripts) |
 | `\rf` `\rq` `\rk` `\rH` `\rr` | start the kernel (if running: show the console), stop, restart, hide / show console, clear it |
 | `\rp` `\rs` `\rt` `\rn` `\rg` `\rh` `\rv` `\ro` | object under cursor: print, summary, str, names, plot, help, view data frame, object list |
-| `\mc` `\mn` `<S-CR>`, `\ma` `\mb` `\mu` `\mR` `\mI` | notebooks: run chunk (and go to next), run all / above / above then this one / restart and run above / import chunks |
+| `\mc` `\mn` `<S-CR>`, `\ma` `\mA` `\mb` `\mu` `\mR` `\mI` | notebooks: run chunk (and go to next), run all / all R chunks with output in the console only / above / above then this one / restart and run above / import chunks |
 | `\md` `\mD` `\mh` `\mo`, `\gn` `\gN` | notebooks: delete / clear all outputs, hide output, output in a float; next / previous chunk |
 | `\kk` / `\ko` | knit R Markdown (notebooks: execute + export HTML) / open the output |
 | `ix` `ax`, `]x` `[x` | code chunk / notebook cell: select inside / with fences; next / previous (markdown, Rmd, notebooks) |
