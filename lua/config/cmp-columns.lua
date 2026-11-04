@@ -473,6 +473,12 @@ local function lookup(ctx)
   end
 end
 
+-- Names of the data frames read from files in `buf` (`df <- read.csv(…)`),
+-- for ranking them first where a data frame goes (completion.lua)
+function source.frame_names(buf, lang)
+  return frames(buf, lang)
+end
+
 -- For the LSP transform in completion.lua: where columns are known, the
 -- names they replace. `only` = after df$ or in df["…"], where nothing but a
 -- column fits, so the language server's guesses can go.

@@ -5,7 +5,7 @@ local function region()
 end
 
 -- Sources for each kind of region; anything else gets the default list
-local DEFAULT_SOURCES = { "lsp", "kernel", "path", "snippets", "buffer", "columns", "codeium" }
+local DEFAULT_SOURCES = { "lsp", "kernel", "arg_values", "path", "snippets", "buffer", "columns", "codeium" }
 local SOURCES_BY_REGION = {
   -- language-server items (keywords, builtins, members) are noise here
   comment = { "buffer", "path", "spell", "codeium" },
@@ -18,6 +18,38 @@ local SOURCES_BY_REGION = {
   -- filetypes, see lua/config/options.lua)
   prose = { "lsp", "path", "snippets", "buffer", "spell", "codeium" },
 }
+
+-- In R / Python code the sources also follow what goes at the cursor
+-- (lua/config/cmp-slot.lua). Codeium helps where the rest is open-ended:
+-- new lines, the rest of a call, and text for people (labs(title = "…"),
+-- message("…")). Where the argument takes a known kind of value (TRUE,
+-- a number, one of c("a", "b"), a function, a data frame, a colour, a
+-- column) or after df$ / pkg::, its guesses only push the real choices
+-- down, and so do snippets and plain buffer words.
+local UNTYPED_ARG = { "lsp", "kernel", "arg_values", "columns", "path", "buffer", "codeium" }
+local function slot_sources(slot)
+  local t = slot.type
+  if slot.where == "member" then
+    return { "lsp", "kernel", "columns" }
+  elseif t == "column" then
+    return { "columns", "kernel", "lsp", "arg_values" }
+  elseif t == "text" then
+    -- words in the string; outside quotes a variable may hold the text
+    return slot.quoted and { "codeium", "buffer" } or UNTYPED_ARG
+  elseif t == "colour" then
+    return { "colours", "lsp", "kernel" }
+  elseif t == "logical" or t == "choice" then
+    return { "arg_values", "lsp", "kernel" }
+  elseif t == "number" or t == "function" or t == "data" then
+    return { "lsp", "kernel" }
+  elseif t == "string" then
+    return slot.quoted and { "lsp" } or { "lsp", "kernel", "arg_values" }
+  elseif slot.where == "value" or slot.where == "arg" then
+    return UNTYPED_ARG
+  elseif slot.where == "string" then
+    return { "lsp", "codeium", "buffer" } -- lsp: Python dict keys, Literal values
+  end
+end
 
 -- Does `s` contain every character of `sub`, in order?
 local function has_in_order(s, sub)
@@ -57,35 +89,94 @@ local function codeium_eat_closers(ctx, items)
   return items
 end
 
--- With a kernel running, R/Python code gets completions from both the
--- language server and the kernel (lua/config/kernel/complete.lua), mostly
--- the same names twice (`file` and `file = `). Keep the kernel's copy (it
--- knows the running session and its data frames) and drop the language
--- server's item for any name the kernel also returned.
-local function drop_kernel_duplicates(items)
-  local names = {} -- client id -> name
-  local function client(item)
-    if names[item.client_id] == nil then
-      local c = vim.lsp.get_client_by_id(item.client_id)
-      names[item.client_id] = c and c.name or false
-    end
-    return names[item.client_id]
-  end
-  local function key(label)
-    return (label:gsub("%s*=%s*$", ""):gsub("%(.*$", ""))
-  end
-  local from_kernel = {}
+-- Argument names end in `=`: R `header = `, Python `header=`
+local function is_arg(item)
+  return item.label:match("=%s*$") ~= nil
+end
+
+-- The R language server labels its argument items `header` (inserting
+-- `header = `), so they'd look like objects to the rules below. Label them
+-- the way the kernel and basedpyright do, and give every argument item the
+-- same kind, so they share an icon.
+local function normalize_args(items)
+  local property = require("blink.cmp.types").CompletionItemKind.Property
   for _, item in ipairs(items) do
-    if item.source_id == "kernel" then
-      from_kernel[key(item.label)] = true
+    if item.detail == "parameter" and item.insertText == item.label .. " = " then
+      item.label = item.insertText
+    end
+    if is_arg(item) then
+      item.kind = property
     end
   end
-  if next(from_kernel) == nil then
+  return items
+end
+
+-- The R language server's "value for method" items ("kendall", inserting
+-- the quotes) come for every argument of the call with a string default,
+-- wherever you are in it: after cor(x, method = it also offers "everything"
+-- for `use`. Keep the ones for the argument being written, and only when
+-- cmp-arg-values.lua has nothing for it (it does the same, with TRUE/FALSE
+-- and inside quotes too).
+local function current_arg_values(items)
+  local any = false
+  for _, item in ipairs(items) do
+    if type(item.detail) == "string" and item.detail:match("^value for ") then
+      any = true
+      break
+    end
+  end
+  if not any then
     return items
   end
+  local arg_values = require("config.cmp-arg-values")
+  local name = arg_values.arg_here()
+  local ours = name and arg_values.values_here()
   return vim.tbl_filter(function(item)
-    return not (item.source_id == "lsp" and client(item) and from_kernel[key(item.label)])
+    local of = type(item.detail) == "string" and item.detail:match("^value for (.+)$")
+    return not of or (of == name and not ours)
   end, items)
+end
+
+-- With a kernel running, R/Python code gets completions from both the
+-- language server and the kernel (lua/config/kernel/complete.lua), mostly
+-- the same names twice. For objects keep the kernel's copy (it knows the
+-- running session and its data frames); for arguments keep the language
+-- server's, which shows the argument's documentation. blink transforms each
+-- source's items on their own, so this runs on the merged lists instead
+-- (see the config function below).
+local function drop_kernel_duplicates(items_by_source)
+  local kernel, lsp = items_by_source.kernel, items_by_source.lsp
+  if not (kernel and #kernel > 0) then
+    return items_by_source
+  end
+  lsp = lsp or {}
+  local function key(item)
+    return (is_arg(item) and "=" or "") .. item.label:gsub("%s*=%s*$", ""):gsub("%(.*$", "")
+  end
+  local in_kernel, in_lsp = {}, {}
+  for _, item in ipairs(kernel) do
+    in_kernel[key(item)] = true
+  end
+  for _, item in ipairs(lsp) do
+    in_lsp[key(item)] = true
+  end
+  local out = {}
+  for id, items in pairs(items_by_source) do
+    out[id] = items
+  end
+  out.lsp = vim.tbl_filter(function(item)
+    return is_arg(item) or not in_kernel[key(item)]
+  end, lsp)
+  -- df$ columns: cmp-columns.lua has them (with examples) when it knows
+  -- the frame, so the kernel's copies go
+  local columns = {}
+  for _, item in ipairs(items_by_source.columns or {}) do
+    columns[item.label] = true
+  end
+  out.kernel = vim.tbl_filter(function(item)
+    return not (is_arg(item) and in_lsp[key(item)]) and not columns[item.label]
+  end, kernel)
+  return out
 end
 
 -- Snippets only complete what you're typing, they never turn an
@@ -119,6 +210,11 @@ local function snippets_as_completions(ctx, items)
   local row, col = ctx.cursor[1] - 1, ctx.cursor[2]
   local run = ctx.line:sub(1, col):match("^%s*(.-)$") -- the line so far, minus indentation
   local keyword = ctx.get_keyword()
+  -- A number being typed (x = 1) isn't the start of a date or a time;
+  -- from four digits on (2026) it may be
+  if keyword:match("^%d+$") and #keyword < 4 then
+    return {}
+  end
   local out = {}
   for _, item in ipairs(items) do
     local body = item.textEdit and item.textEdit.newText or item.insertText or ""
@@ -165,12 +261,18 @@ local function lsp_snippet_is_completion(ctx, item)
     and starts_with(expanded(body), keyword)
 end
 
--- Argument names (`header =`) already written in this call aren't offered
--- again: read.csv(f, header = TRUE, he| doesn't suggest `header =`
-local function without_given_args(items)
+-- Argument names already given in this call aren't offered again, by name
+-- or by position (when the server's signature for the call is known, see
+-- cmp-signature.lua): read.csv(f, header = TRUE, | suggests neither
+-- `header = ` nor `file = `. R's `...` isn't an argument you can name.
+-- Runs on every source's items (kernel arguments too).
+local function without_given_args(ctx, items)
+  if ctx.mode == "cmdline" then
+    return items
+  end
   local has_args = false
   for _, item in ipairs(items) do
-    if item.label:match("=%s*$") then
+    if is_arg(item) then
       has_args = true
       break
     end
@@ -178,14 +280,160 @@ local function without_given_args(items)
   if not has_args then
     return items
   end
-  local given = require("config.cmp-context").given_args()
-  if next(given) == nil then
-    return items
+  local context = require("config.cmp-context")
+  local call = context.open_calls()[1]
+  -- After `method = ` comes a value, not another argument name
+  local current = call and context.top_level(call.args):match("[^,]*$") or ""
+  if current:match("^%s*[%a._][%w._]*%s*=") and not current:match("^%s*[%w._]+%s*==") then
+    return vim.tbl_filter(function(item)
+      return not is_arg(item)
+    end, items)
   end
+  local sig = require("config.cmp-signature")
+  local given = sig.filled(sig.cached(ctx.bufnr), context.call_args(call))
   return vim.tbl_filter(function(item)
     local name = item.label:match("^([%w._]+)%s*=%s*$")
-    return not (name and given[name])
+    return not (name and given[name]) and not item.label:match("^%.%.%.%s*=")
   end, items)
+end
+
+-- Language server / kernel / buffer items for a typed slot (cmp-slot.lua):
+-- what can't go there is dropped, what fits is ranked first. Objects in
+-- the kernel's session are known by type (data frame, function, logical,
+-- ...), data frames read from files by cmp-columns.lua.
+--   function   FUN = |       functions only
+--   data       data = |      no functions; data frames first
+--   colour     colour = |    no functions (variables can hold colours)
+--   logical / number / string / choice / column: functions ranked lower
+--              (n = nrow(df) is fine, but rarely what you want)
+-- and nowhere typed: snippets, modules, the R server's plain-word items.
+local GENERAL_SOURCES = { lsp = true, kernel = true, buffer = true }
+local OBJECT_KINDS = { Variable = true, Field = true, Constant = true, Value = true, Property = true, Reference = true }
+local FUNCTION_KINDS = { Function = true, Method = true, Constructor = true }
+local CALLABLE_KINDS = { Function = true, Method = true, Constructor = true, Class = true, Struct = true }
+local NEVER_TYPED = { Snippet = true, Module = true, Text = true, Keyword = true, Folder = true, File = true }
+local function fits_slot(ctx, items)
+  if ctx.mode == "cmdline" or #items == 0 then
+    return items
+  end
+  local slot_lib = require("config.cmp-slot")
+  local slot = slot_lib.here()
+  local t = slot.type
+  -- After a space in quoted text (labs(title = "Fuel use by |), only
+  -- Codeium's continuation, not every word in the buffer
+  if t == "text" and slot.quoted and ctx.get_keyword() == "" then
+    return vim.tbl_filter(function(item)
+      return item.source_id == "codeium"
+    end, items)
+  end
+  -- After df$ / obj. only members fit, not the R server's plain words
+  if slot.where == "member" then
+    local kinds = require("blink.cmp.types").CompletionItemKind
+    return vim.tbl_filter(function(item)
+      return not (GENERAL_SOURCES[item.source_id] and NEVER_TYPED[kinds[item.kind] or ""])
+    end, items)
+  end
+  if not t or t == "text" then
+    return items
+  end
+  local kinds = require("blink.cmp.types").CompletionItemKind
+  local objects = slot.lang and slot_lib.object_types(slot.lang) or {}
+  local frames = {}
+  if t == "data" and slot.lang then
+    frames = require("config.cmp-columns").frame_names(ctx.bufnr, slot.lang) or {}
+  end
+  local keyword = ctx.get_keyword()
+  local out = {}
+  for _, item in ipairs(items) do
+    local kind = kinds[item.kind] or ""
+    local name = item.label:match("^[%w._]+$") and item.label
+    local typed = name and objects[name]
+    -- The R server's package objects: `{grDevices}`, `{datasets}`, ...
+    local pkg = type(item.detail) == "string" and item.detail:match("^{(.+)}$")
+    local keep, boost = true, 0
+    if not GENERAL_SOURCES[item.source_id] or (is_arg(item) and slot.where == "arg") then
+      keep = true -- slot-specific sources (arg values, columns, colours) and argument names
+    elseif item.source_id == "kernel" and next(objects) and not typed then
+      -- The kernel lists base and package names too, all as plain
+      -- variables; the language server has the same with their real kinds
+      keep = false
+    elseif NEVER_TYPED[kind] or item.detail == "Auto-import" then
+      keep = false -- (basedpyright's imports from other modules: T, TAB0, ...)
+    elseif
+      t == "logical"
+      and (
+        item.label:match("^TRUE$")
+        or item.label:match("^FALSE$")
+        or item.label:match("^True$")
+        or item.label:match("^False$")
+      )
+    then
+      keep = false -- the values source has them, the other one first
+    elseif pkg and not FUNCTION_KINDS[kind] and not (t == "data" and pkg == "datasets") then
+      keep = false -- blues9, .LC.categories, class_scale: not what you'd pass
+    elseif t == "function" then
+      keep = CALLABLE_KINDS[kind] or typed == "function"
+    elseif t == "data" then
+      keep = not FUNCTION_KINDS[kind] and (typed == nil or typed == "data")
+      boost = (typed == "data" or frames[item.label]) and 8 or 0
+    elseif t == "colour" then
+      keep = not FUNCTION_KINDS[kind] and typed ~= "function"
+    else
+      if CALLABLE_KINDS[kind] or typed == "function" then
+        boost = -5
+      elseif typed == t or (t == "choice" and typed == "string") then
+        boost = 6
+      elseif OBJECT_KINDS[kind] and t ~= "column" then
+        boost = 1
+      end
+    end
+    -- What starts with the typed word before what merely contains its
+    -- letters (FUN = me: mean before as.double.difftime)
+    if keep and #keyword > 0 and item.label:sub(1, #keyword) == keyword then
+      boost = boost + 3
+    end
+    if keep then
+      if boost ~= 0 then
+        item.score_offset = (item.score_offset or 0) + boost
+      end
+      out[#out + 1] = item
+    end
+  end
+  return out
+end
+
+-- Inside an R / Python call, ask for the call's signature alongside the
+-- language server's completions and hold those until it's known (at most
+-- 200 ms, and only once per call), so the filter above can tell which
+-- arguments were given by position
+local function lsp_with_signature(source, ctx, callback)
+  local lang = region().lang
+  if not (lang == "r" or lang == "python") or not require("config.cmp-context").open_calls()[1] then
+    return source:get_completions(ctx, callback)
+  end
+  -- Without the signature yet, have blink ask again on the next keystroke
+  -- (it would otherwise keep filtering this list), when it may be known
+  local waiting, held, known = true, nil, false
+  local function deliver(response)
+    if response and not known then
+      response.is_incomplete_forward = true
+    end
+    callback(response)
+  end
+  require("config.cmp-signature").fetch(ctx.bufnr, function(sig)
+    waiting, known = false, sig ~= nil
+    if held then
+      deliver(held)
+      held = nil
+    end
+  end)
+  return source:get_completions(ctx, function(response)
+    if waiting then
+      held = response
+    else
+      deliver(response)
+    end
+  end)
 end
 
 -- In Rmd / Quarto / notebooks, buffer words follow the region: an R chunk
@@ -245,6 +493,21 @@ return {
     },
     version = "1.*",
 
+    config = function(_, opts)
+      require("blink.cmp").setup(opts)
+      -- blink has no hook over all sources' items together, which the
+      -- kernel / language server de-dup needs: wrap the step that filters
+      -- them for the menu. If blink renames it, completion just keeps both.
+      local list = require("blink.cmp.completion.list")
+      local fuzzy = list.fuzzy
+      if type(fuzzy) == "function" then
+        list.fuzzy = function(context, items_by_source)
+          local ok, merged = pcall(drop_kernel_duplicates, items_by_source)
+          return fuzzy(context, ok and merged or items_by_source)
+        end
+      end
+    end,
+
     opts = {
       keymap = {
         preset = "super-tab",
@@ -290,14 +553,27 @@ return {
           show_on_keyword = true,
           show_on_trigger_character = true,
           -- Spaces never open the menu, except right after an `=` in maths,
-          -- so the result of `\frac{1+1}{5} = ` shows up (cmp-latex-calc.lua).
-          -- Braces likewise only after `= \fbox{` (autopairs types `{}`),
-          -- not in \frac{. Region checks only when one of those was typed.
+          -- so the result of `\frac{1+1}{5} = ` shows up (cmp-latex-calc.lua),
+          -- and after an R argument that takes one of a few values
+          -- (`method = `, cmp-arg-values.lua). Braces likewise only after
+          -- `= \fbox{` (autopairs types `{}`), not in \frac{. Region checks
+          -- only when one of those was typed.
           show_on_blocked_trigger_characters = function()
             local before = vim.api.nvim_get_current_line():sub(1, vim.api.nvim_win_get_cursor(0)[2])
             local answer = before:match("=%s+$") or before:match("=%s*\\%a+{$")
             if (answer or before:match("[{}]$")) and region().kind == "math" then
               return answer and { "\n", "\t" } or { " ", "\n", "\t", "{", "}" }
+            end
+            if before:match("[%w._]%s*=%s+$") and require("config.cmp-arg-values").values_here() then
+              return { "\n", "\t" }
+            end
+            -- and while writing text for people in quotes (labs(title =
+            -- "Fuel use by ), where Codeium continues the sentence
+            if before:match("%S%s$") then
+              local slot = require("config.cmp-slot").here()
+              if slot.type == "text" and slot.quoted then
+                return { "\n", "\t" }
+              end
             end
             return { " ", "\n", "\t" }
           end,
@@ -324,8 +600,9 @@ return {
       },
 
       sources = {
-        transform_items = function(_, items)
-          return drop_kernel_duplicates(items)
+        -- Every source's items, after the source's own transform_items
+        transform_items = function(ctx, items)
+          return fits_slot(ctx, without_given_args(ctx, items))
         end,
         -- Chosen by where the cursor is, so an R chunk in an Rmd completes
         -- R while the prose around it completes words.
@@ -334,14 +611,19 @@ return {
           -- "code" too: right after typing `"` the string isn't closed yet
           -- and treesitter doesn't see it as one
           if (r.kind == "string" or r.kind == "code") and require("config.cmp-context").file_arg() then
-            -- read.csv("…"): file names; lsp stays for Python Literal/dict keys
-            return { "file_args", "lsp", "codeium" }
+            -- read.csv("…"): file names; lsp stays for Python Literal/dict keys.
+            -- No Codeium: it can only guess names the file source knows.
+            return { "file_args", "lsp" }
           end
           -- ![](…) / [text](…) and bibliography: in a YAML header
           if (r.kind == "prose" or r.kind == "yaml") and require("config.cmp-context").file_arg() then
             return { "file_args" }
           end
-          return SOURCES_BY_REGION[r.kind] or DEFAULT_SOURCES
+          if SOURCES_BY_REGION[r.kind] then
+            return SOURCES_BY_REGION[r.kind]
+          end
+          -- R / Python: by what goes at the cursor (slot_sources, above)
+          return slot_sources(require("config.cmp-slot").here()) or DEFAULT_SOURCES
         end,
         per_filetype = {
           lua = { inherit_defaults = true, "lazydev" },
@@ -355,7 +637,7 @@ return {
                 return lsp_snippet_is_completion(ctx, item)
               end, items)
               local private_ok = ctx.get_keyword():sub(1, 1) == "_"
-              items = without_given_args(items)
+              items = normalize_args(current_arg_values(items))
               -- The columns source (cmp-columns.lua) knows this data frame:
               -- don't list its columns twice, and after df$ / in df["…"]
               -- drop the server's guesses
@@ -372,12 +654,13 @@ return {
                 -- Argument names (R `header = `, Python `header=`) only come
                 -- back inside a call, where they're what you're most likely
                 -- typing: rank them above functions like head()
-                if item.label:match("=%s*$") then
+                if is_arg(item) then
                   item.score_offset = (item.score_offset or 0) + 5
                 end
               end
               return items
             end,
+            override = { get_completions = lsp_with_signature },
           },
           snippets = {
             -- No `for`/`if` snippets in member lists after `.`, `:` etc.
@@ -459,6 +742,21 @@ return {
             opts = { get_bufnrs = file_buffers },
             transform_items = region_words,
           },
+          -- "pearson" / "kendall" / "spearman" after cor(x, method = , and
+          -- TRUE / FALSE for logical arguments, from the call's signature
+          arg_values = {
+            name = "Values",
+            module = "config.cmp-arg-values",
+            score_offset = 10, -- above argument names and objects
+            async = true,
+            timeout_ms = 300,
+          },
+          -- "steelblue", "tab:blue" where a colour goes (cmp-colours.lua)
+          colours = {
+            name = "Colours",
+            module = "config.cmp-colours",
+            score_offset = 10,
+          },
           -- Objects, columns and arguments from the running R / Python kernel
           kernel = {
             name = "Kernel",
@@ -494,7 +792,18 @@ return {
             -- items show right away and Codeium's join when they arrive.
             async = true,
             timeout_ms = 1000,
-            transform_items = codeium_eat_closers,
+            -- In text for people (labs(title = "…"), see slot_sources) it's
+            -- the one that knows what comes next: first there
+            transform_items = function(ctx, items)
+              items = codeium_eat_closers(ctx, items)
+              local slot = require("config.cmp-slot").here()
+              if slot.type == "text" and slot.quoted then
+                for _, item in ipairs(items) do
+                  item.score_offset = (item.score_offset or 0) + 8
+                end
+              end
+              return items
+            end,
             -- Just below LSP, so Tab (super-tab) accepts the LSP item first
             score_offset = -2,
             max_items = 3,

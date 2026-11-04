@@ -347,12 +347,15 @@ end
 
 local OPENERS, CLOSERS = { ["("] = true, ["["] = true, ["{"] = true }, { [")"] = true, ["]"] = true, ["}"] = true }
 
--- Calls the cursor is inside, innermost first: { name, before, args },
--- where `name` is the function (without `pkg::`), `before` the text before
--- it and `args` the text from its `(` to the cursor. Plain text, because
--- the code being typed usually doesn't parse yet.
+-- Calls the cursor is inside, innermost first: { name, before, args, row,
+-- col }, where `name` is the function (without `pkg::`), `before` the text
+-- before it, `args` the text from its `(` to the cursor, and row/col where
+-- that `(` is (0-based row; the column counts string contents as blanked,
+-- so it only identifies the call, see cmp-signature.lua). Plain text,
+-- because the code being typed usually doesn't parse yet.
 function M.open_calls()
   local text = text_before_cursor(30)
+  local first_row = math.max(0, cursor() - 30)
   local calls, depth = {}, 0
   for i = #text, 1, -1 do
     local ch = text:sub(i, i)
@@ -365,10 +368,13 @@ function M.open_calls()
         local head = text:sub(1, i - 1)
         local name = head:match("([%a._][%w._]*)%s*$")
         if name then
+          local _, newlines = head:gsub("\n", "")
           calls[#calls + 1] = {
             name = name,
             before = head:sub(1, #head - #head:match("[%w._:]*%s*$")),
             args = text:sub(i + 1),
+            row = first_row + newlines,
+            col = #head:match("[^\n]*$"),
           }
         end
       end
@@ -393,19 +399,29 @@ local function top_level(args)
 end
 M.top_level = top_level
 
--- Names of the arguments already given (`name =`) in the innermost call,
--- not counting the one being typed
+-- The arguments already written in `call` (default: the innermost one),
+-- not counting the one being typed: { named = { header = true },
+-- positional = 1 } for read.csv(f, header = TRUE, |
+function M.call_args(call)
+  call = call or M.open_calls()[1]
+  local named, positional = {}, 0
+  if call then
+    local done = top_level(call.args):gsub("[^,]*$", "") -- drop the argument being typed
+    for arg in done:gmatch("([^,]*),") do
+      local name = arg:match("^%s*([%a._][%w._]*)%s*=")
+      if name and not arg:match("^%s*[%w._]+%s*==") then
+        named[name] = true
+      elseif arg:match("%S") then
+        positional = positional + 1
+      end
+    end
+  end
+  return { named = named, positional = positional }
+end
+
+-- Names of the arguments already given (`name =`) in the innermost call
 function M.given_args()
-  local call = M.open_calls()[1]
-  local names = {}
-  if not call then
-    return names
-  end
-  local done = top_level(call.args):gsub("[^,]*$", "") -- drop the argument being typed
-  for name in ("," .. done):gmatch(",%s*([%a._][%w._]*)%s*=[^=]") do
-    names[name] = true
-  end
-  return names
+  return M.call_args().named
 end
 
 -- word -> { [lang] = true } for every word in the buffer's prose ("prose"),
