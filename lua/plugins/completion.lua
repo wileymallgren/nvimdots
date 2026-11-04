@@ -282,6 +282,9 @@ return {
               and text:find("\n") ~= nil
           end,
         },
+        -- Moving through the menu only selects; nothing is written into the
+        -- line until the item is accepted
+        list = { selection = { auto_insert = false } },
         trigger = {
           show_on_keyword = true,
           show_on_trigger_character = true,
