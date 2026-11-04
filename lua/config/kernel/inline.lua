@@ -1,7 +1,8 @@
 -- Chunk output shown inline under each chunk's closing fence (virtual
 -- lines; plots drawn with image.nvim), plus a status on the fence line:
 -- running / done [execution count] and time / error. The code also shows
--- in the console. Outputs follow edits (extmarks).
+-- in the console. Outputs follow edits (extmarks) and stay under the
+-- closing fence.
 --   run(c), run_all(upto, filter), delete(), clear_all(), toggle_hidden(),
 --   open_float(), outputs(buf) (for lua/config/cmp-codeium.lua)
 
@@ -31,17 +32,6 @@ local start_clock -- (defined below)
 local function outputs_of(buf)
   state[buf] = state[buf] or {}
   return state[buf]
-end
-
--- The output attached to chunk `c` (its closing fence), or nil.
-local function find(buf, c)
-  local row = c.e - 1
-  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, { row, 0 }, { row, -1 }, {})) do
-    local out = outputs_of(buf)[m[1]]
-    if out then
-      return out
-    end
-  end
 end
 
 local function after_cr(s)
@@ -74,6 +64,12 @@ local function clear_images(out)
     pcall(img.clear, img)
   end
   out.images, out.image_key = {}, nil
+end
+
+local function remove(buf, out)
+  clear_images(out)
+  pcall(vim.api.nvim_buf_del_extmark, buf, ns, out.id)
+  outputs_of(buf)[out.id] = nil
 end
 
 local function clock(secs)
@@ -134,7 +130,7 @@ local function render(buf, out)
   elseif #out.items > 0 then
     table.insert(lines, { { "  … output hidden (\\mh to show)", "KernelOutput" } })
   end
-  vim.api.nvim_buf_set_extmark(buf, ns, row, 0, { id = out.id, virt_lines = lines, right_gravity = false })
+  vim.api.nvim_buf_set_extmark(buf, ns, row, 0, { id = out.id, virt_lines = lines })
 
   -- Plots: only re-placed when they (or where they go) changed, so the
   -- running clock doesn't make them flicker
@@ -210,6 +206,44 @@ start_clock = function()
   end
 end
 
+-- The output of chunk `c`, or nil. It belongs on the closing fence; one
+-- that an edit moved off it (into the chunk, or below it when the fence was
+-- cut and pasted back) is put back there, and if there are several, the
+-- one on the fence (else the newest) stays and the others go. (Not done
+-- while editing: a fence deleted for a moment merges two chunks.)
+local function find(buf, c)
+  local stop = vim.api.nvim_buf_line_count(buf) - 1
+  for _, nxt in ipairs(chunks.find(buf)) do
+    if nxt.s > c.e then
+      stop = nxt.s - 2
+      break
+    end
+  end
+  local keep, extra = nil, {}
+  for _, m in ipairs(vim.api.nvim_buf_get_extmarks(buf, ns, { c.s - 1, 0 }, { stop, -1 }, {})) do
+    local out = outputs_of(buf)[m[1]]
+    if out then
+      local on_fence = m[2] == c.e - 1
+      if not keep or (on_fence and not keep.on_fence) or (on_fence == keep.on_fence and out.id > keep.out.id) then
+        if keep then
+          table.insert(extra, keep.out)
+        end
+        keep = { out = out, on_fence = on_fence }
+      else
+        table.insert(extra, out)
+      end
+    end
+  end
+  for _, out in ipairs(extra) do
+    remove(buf, out)
+  end
+  if keep and not keep.on_fence then
+    vim.api.nvim_buf_set_extmark(buf, ns, c.e - 1, 0, { id = keep.out.id })
+    render(buf, keep.out)
+  end
+  return keep and keep.out
+end
+
 -- Mark outputs whose chunk was edited after it ran ("stale"), and unmark
 -- them when the code is back to what ran.
 local function check_stale(buf)
@@ -269,7 +303,7 @@ function M.run_code(c, code, buf)
   buf = buf or vim.api.nvim_get_current_buf()
   local out = find(buf, c)
   if not out then
-    local id = vim.api.nvim_buf_set_extmark(buf, ns, c.e - 1, 0, { right_gravity = false })
+    local id = vim.api.nvim_buf_set_extmark(buf, ns, c.e - 1, 0, {})
     out = { id = id }
     outputs_of(buf)[id] = out
   end
@@ -327,7 +361,7 @@ end
 function M.restore(buf, c, items, count, failed)
   local out = find(buf, c)
   if not out then
-    local id = vim.api.nvim_buf_set_extmark(buf, ns, c.e - 1, 0, { right_gravity = false })
+    local id = vim.api.nvim_buf_set_extmark(buf, ns, c.e - 1, 0, {})
     out = { id = id }
     outputs_of(buf)[id] = out
   end
@@ -452,12 +486,6 @@ function M.restart_and_run_above()
     end
   end
   M.run_all(line)
-end
-
-local function remove(buf, out)
-  clear_images(out)
-  pcall(vim.api.nvim_buf_del_extmark, buf, ns, out.id)
-  outputs_of(buf)[out.id] = nil
 end
 
 function M.delete()
