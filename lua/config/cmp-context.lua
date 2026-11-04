@@ -149,11 +149,15 @@ end
 -- Unclosed $ before the cursor on this line (maths still being typed). Uses
 -- pandoc's rules, so prices aren't maths: a $ opens only when followed by
 -- something other than a space or digit ($x, $\alpha, not $5), and closes
--- only after a non-space and when not followed by a digit.
+-- only after a non-space and when not followed by a digit. An odd number of
+-- $$ means display maths is still open ($$\frac{1}{2} = ).
 local function open_dollar(buf)
   local row, col = cursor()
   local masked = require("config.rmd-latex-hl").masked_lines(buf)[row + 1] or ""
-  local before = masked:sub(1, col):gsub("\\%$", "  "):gsub("%$%$", "  ")
+  local before, dd = masked:sub(1, col):gsub("\\%$", "  "):gsub("%$%$", "  ")
+  if dd % 2 == 1 then
+    return true
+  end
   local open = false
   for pos in before:gmatch("()%$") do
     local prev, next = before:sub(pos - 1, pos - 1), before:sub(pos + 1, pos + 1)

@@ -10,8 +10,9 @@ local SOURCES_BY_REGION = {
   -- language-server items (keywords, builtins, members) are noise here
   comment = { "buffer", "path", "spell", "codeium" },
   -- \frac, \alpha, ... (friendly-snippets' tex set is document-level:
-  -- \plotgraph3d, \fractionlarge, ... and would outrank \frac)
-  math = { "latex_math", "codeium" },
+  -- \plotgraph3d, \fractionlarge, ... and would outrank \frac), and the
+  -- value of the arithmetic before an `=`
+  math = { "latex_calc", "latex_math", "codeium" },
   yaml = { "buffer", "path" },
   -- spelling corrections for misspelled words (spell is on in prose
   -- filetypes, see lua/config/options.lua)
@@ -288,6 +289,18 @@ return {
         trigger = {
           show_on_keyword = true,
           show_on_trigger_character = true,
+          -- Spaces never open the menu, except right after an `=` in maths,
+          -- so the result of `\frac{1+1}{5} = ` shows up (cmp-latex-calc.lua).
+          -- Braces likewise only after `= \fbox{` (autopairs types `{}`),
+          -- not in \frac{. Region checks only when one of those was typed.
+          show_on_blocked_trigger_characters = function()
+            local before = vim.api.nvim_get_current_line():sub(1, vim.api.nvim_win_get_cursor(0)[2])
+            local answer = before:match("=%s+$") or before:match("=%s*\\%a+{$")
+            if (answer or before:match("[{}]$")) and region().kind == "math" then
+              return answer and { "\n", "\t" } or { " ", "\n", "\t", "{", "}" }
+            end
+            return { " ", "\n", "\t" }
+          end,
         },
       },
 
@@ -434,6 +447,13 @@ return {
             name = "LaTeX",
             module = "config.cmp-latex-math",
             score_offset = 5,
+          },
+          latex_calc = {
+            name = "Calc",
+            module = "config.cmp-latex-calc",
+            -- Its items are 10 apart (0, -10, -20); even the last stays
+            -- above Codeium, so Tab takes the result
+            score_offset = 30,
           },
           buffer = {
             opts = { get_bufnrs = file_buffers },
