@@ -38,6 +38,25 @@ function M.highlight(buf)
   end)
 end
 
+-- While typing: refresh on the first change at once, then at most once more
+-- per 50 ms for the changes that follow
+local pending = {}
+local function highlight_soon(buf)
+  if pending[buf] then
+    pending[buf].again = true
+    return
+  end
+  M.highlight(buf)
+  pending[buf] = { again = false }
+  vim.defer_fn(function()
+    local p = pending[buf]
+    pending[buf] = nil
+    if p and p.again then
+      M.highlight(buf)
+    end
+  end, 50)
+end
+
 function M.setup()
   set_highlights()
   local group = vim.api.nvim_create_augroup("ChunkHl", { clear = true })
@@ -53,6 +72,13 @@ function M.setup()
         buffer = ev.buf,
         callback = function()
           M.highlight(ev.buf)
+        end,
+      })
+      vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP" }, {
+        group = group,
+        buffer = ev.buf,
+        callback = function()
+          highlight_soon(ev.buf)
         end,
       })
     end,
