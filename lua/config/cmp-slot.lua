@@ -7,11 +7,15 @@
 --           "value"      after `name = ` in a call
 --           "arg"        an argument position: a name or a positional value
 --           "string"     in quotes, outside any call that tells more
+--           "chain"      the next step of an R ggplot chain (after `+`) or
+--                        pipe (after |> / %>%): chain = "ggplot" / "pipe"
 --           "statement"  everything else (new lines, operators, ...)
 --   type    for "value" / "arg" / "string", what the argument takes, when
 --           known: "logical", "number", "string", "choice", "function",
 --           "data", "colour", "text" (words for people: titles, labels,
---           messages), "column" (aes(), dplyr verbs, formulas)
+--           messages), "column" (aes(), dplyr verbs, formulas),
+--           "level" (a value of a column being compared: filter(sex == "|,
+--           df$cyl %in% c(|; name is the column, see cmp-columns.lua)
 --   name    the argument (`method`), fn the called function (`cor`)
 --   quoted  the cursor is inside quotes
 --
@@ -23,7 +27,8 @@
 --
 -- M.object_types(lang) -> { name = type } for the objects in the running
 -- kernel's session (data / function / logical / number / string), cached
--- and refreshed in the background, so items can be ranked by type.
+-- and refreshed in the background, so items can be ranked by type
+-- ("layer" for ggplot objects and themes, which can follow a `+`).
 
 local context = require("config.cmp-context")
 local signature = require("config.cmp-signature")
@@ -234,6 +239,74 @@ local function open_quote(before)
   return quote ~= nil
 end
 
+-- Lines up to the cursor, the last one cut at it
+local function lines_before(max_lines)
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local lines = vim.api.nvim_buf_get_lines(0, math.max(0, row - max_lines), row, false)
+  lines[#lines] = (lines[#lines] or ""):sub(1, col)
+  return lines
+end
+
+-- A line without its comment (roughly: a # with no quote after it)
+local function code_of(line)
+  return (line:gsub("%s*#[^\"']*$", ""))
+end
+
+-- Does this line go on onto the next one? (ends in + , ( |> %>%)
+local function continues(line)
+  local code = code_of(line)
+  return code:match("[+,(]%s*$") or code:match("|>%s*$") or code:match("%%>%%%s*$")
+end
+
+-- The next step of a chain goes at the cursor: "ggplot" after a `+` in an
+-- expression that starts with ggplot( (or a ggplot object in the session),
+-- "pipe" after |> / %>% at the top level. R only.
+--   ggplot(df, aes(x, y)) +
+--     geom_|                    -> "ggplot"
+--   df |>
+--     fil|                      -> "pipe"
+local function chain_here(call)
+  local lines = lines_before(30)
+  lines[#lines] = lines[#lines]:gsub("[%w._]*$", "")
+  local i = #lines
+  local text = code_of(lines[i])
+  -- the operator may end the previous line
+  while i > 1 and not text:find("%S") do
+    i = i - 1
+    text = code_of(lines[i])
+  end
+  if text:match("|>%s*$") or text:match("%%>%%%s*$") then
+    return not call and "pipe" or nil
+  end
+  if not text:match("%+%s*$") then
+    return nil
+  end
+  -- The whole expression: inside a call, what's in it; else back to the
+  -- first line of the statement
+  local expr
+  if call then
+    expr = call.args
+  else
+    local first = i
+    while first > 1 and continues(lines[first - 1]) do
+      first = first - 1
+    end
+    local parts = {}
+    for j = first, i do
+      parts[#parts + 1] = code_of(lines[j])
+    end
+    expr = table.concat(parts, "\n")
+  end
+  if expr:match("ggplot%s*%(") then
+    return "ggplot"
+  end
+  -- p + : a ggplot object made earlier
+  local head = expr:match("^%s*([%a._][%w._]*)")
+  if head and M.object_types("r")[head] == "layer" then
+    return "ggplot"
+  end
+end
+
 local cache = { key = nil, value = nil }
 
 function M.here()
@@ -261,6 +334,13 @@ function M.compute()
   local quoted = open_quote(before) or (r.kind == "string" and not before:find("[\"']"))
   local slot = { lang = lang, quoted = quoted }
 
+  -- filter(sex == "|: one of the column's values
+  local compared = require("config.cmp-columns").value_context(lang, before)
+  if compared then
+    slot.where, slot.type, slot.name, slot.df = "value", "level", compared.column, compared.df
+    return slot
+  end
+
   if not quoted then
     local member
     if lang == "r" then
@@ -277,6 +357,13 @@ function M.compute()
   end
 
   local call = context.open_calls()[1]
+  if lang == "r" and not quoted then
+    local chain = chain_here(call)
+    if chain then
+      slot.where, slot.chain = "chain", chain
+      return slot
+    end
+  end
   if not call then
     slot.where = quoted and "string" or "statement"
     slot.type = quoted and "text" or nil
@@ -311,7 +398,8 @@ local({
   e <- globalenv()
   for (n in ls(e)) {
     v <- get(n, envir = e)
-    k <- if (is.data.frame(v)) "data" else if (is.function(v)) "function" else
+    k <- if (inherits(v, c("gg", "theme", "ggproto", "labels"))) "layer" else
+      if (is.data.frame(v)) "data" else if (is.function(v)) "function" else
       if (is.logical(v)) "logical" else if (is.numeric(v)) "number" else
       if (is.character(v)) "string" else ""
     if (nzchar(k)) cat(n, "\t", k, "\n", sep = "")

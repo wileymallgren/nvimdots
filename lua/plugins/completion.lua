@@ -26,24 +26,29 @@ local SOURCES_BY_REGION = {
 -- a number, one of c("a", "b"), a function, a data frame, a colour, a
 -- column) or after df$ / pkg::, its guesses only push the real choices
 -- down, and so do snippets and plain buffer words.
-local UNTYPED_ARG = { "lsp", "kernel", "arg_values", "columns", "path", "buffer", "codeium" }
+local UNTYPED_ARG = { "lsp", "kernel", "arg_values", "used_values", "columns", "path", "buffer", "codeium" }
 local function slot_sources(slot)
   local t = slot.type
   if slot.where == "member" then
     return { "lsp", "kernel", "columns" }
+  elseif slot.where == "chain" then
+    return { "lsp", "kernel", "snippets", "buffer", "codeium" } -- ranked in fits_slot
+  elseif t == "level" then
+    -- filter(sex == "|: the column's values (cmp-columns.lua)
+    return slot.quoted and { "columns", "lsp" } or { "columns", "lsp", "kernel" }
   elseif t == "column" then
     return { "columns", "kernel", "lsp", "arg_values" }
   elseif t == "text" then
     -- words in the string; outside quotes a variable may hold the text
     return slot.quoted and { "codeium", "buffer" } or UNTYPED_ARG
   elseif t == "colour" then
-    return { "colours", "lsp", "kernel" }
+    return { "colours", "used_values", "lsp", "kernel" }
   elseif t == "logical" or t == "choice" then
-    return { "arg_values", "lsp", "kernel" }
+    return { "arg_values", "used_values", "lsp", "kernel" }
   elseif t == "number" or t == "function" or t == "data" then
-    return { "lsp", "kernel" }
+    return { "used_values", "lsp", "kernel" }
   elseif t == "string" then
-    return slot.quoted and { "lsp" } or { "lsp", "kernel", "arg_values" }
+    return slot.quoted and { "lsp", "used_values" } or { "lsp", "kernel", "arg_values", "used_values" }
   elseif slot.where == "value" or slot.where == "arg" then
     return UNTYPED_ARG
   elseif slot.where == "string" then
@@ -176,6 +181,58 @@ local function drop_kernel_duplicates(items_by_source)
   out.kernel = vim.tbl_filter(function(item)
     return not (is_arg(item) and in_lsp[key(item)]) and not columns[item.label]
   end, kernel)
+  return out
+end
+
+-- A value used before in the file (cmp-used-values.lua) that another
+-- source offers too: cor(x, method = has "kendall" from the signature,
+-- colour = "s has steelblue from the colour names. Keep that item, moved
+-- up by as much as the used one would be and marked "used 2×", and drop
+-- the copy. Items are copied before they change: blink hands the same
+-- tables in on every keystroke.
+local MERGE_INTO = { "arg_values", "colours", "lsp", "kernel" }
+local function merge_used_values(items_by_source)
+  local used = items_by_source.used_values
+  if not (used and #used > 0) then
+    return items_by_source
+  end
+  local function text(item)
+    return item.textEdit and item.textEdit.newText or item.insertText or item.label
+  end
+  local by_text = {}
+  for _, item in ipairs(used) do
+    by_text[text(item)] = item
+  end
+  local out, merged = {}, {}
+  for id, items in pairs(items_by_source) do
+    out[id] = items
+  end
+  for _, id in ipairs(MERGE_INTO) do
+    local items = out[id]
+    if items and #items > 0 then
+      local changed
+      for i, item in ipairs(items) do
+        local u = by_text[text(item)]
+        if u and not merged[u] then
+          merged[u] = true
+          changed = changed or vim.list_slice(items)
+          local copy = vim.tbl_extend("force", {}, item)
+          copy.score_offset = (copy.score_offset or 0) + u.used.boost + 1
+          local note = ("used %d×"):format(u.used.count)
+          local desc = item.labelDetails and item.labelDetails.description
+          copy.labelDetails =
+            vim.tbl_extend("force", item.labelDetails or {}, { description = desc and (desc .. ", " .. note) or note })
+          changed[i] = copy
+        end
+      end
+      out[id] = changed or items
+    end
+  end
+  if next(merged) then
+    out.used_values = vim.tbl_filter(function(item)
+      return not merged[item]
+    end, used)
+  end
   return out
 end
 
@@ -312,6 +369,102 @@ local OBJECT_KINDS = { Variable = true, Field = true, Constant = true, Value = t
 local FUNCTION_KINDS = { Function = true, Method = true, Constructor = true }
 local CALLABLE_KINDS = { Function = true, Method = true, Constructor = true, Class = true, Struct = true }
 local NEVER_TYPED = { Snippet = true, Module = true, Text = true, Keyword = true, Folder = true, File = true }
+-- The next step of an R chain (cmp-slot.lua):
+--   ggplot(df, aes(x, y)) +
+--     g|          geom_*, scale_*, theme*, labs, facet_*, ... and ggplot
+--                 objects in the session (my_theme) first
+--   df |>
+--     s|          select, summarise, slice_* (dplyr / tidyr) before sd, seq;
+--                 objects last: a call has to come after |>
+local GGPLOT_PARTS = {
+  "^geom_",
+  "^stat_",
+  "^scale_",
+  "^theme",
+  "^labs$",
+  "^facet_",
+  "^coord_",
+  "^guides?$",
+  "^annotate$",
+  "^[xy]lab$",
+  "^ggtitle$",
+  "^[xy]?lims?$",
+  "^expand_limits$",
+}
+local GGPLOT_PACKAGES =
+  { ggplot2 = true, ggrepel = true, patchwork = true, ggthemes = true, ggridges = true, ggforce = true }
+local PIPE_PACKAGES = { dplyr = true, tidyr = true, janitor = true }
+local PIPE_FUNCTIONS = {}
+for _, name in ipairs(require("config.cmp-context").data_verbs) do
+  PIPE_FUNCTIONS[name] = true
+end
+for _, name in ipairs({
+  "ungroup",
+  "rowwise",
+  "slice",
+  "slice_head",
+  "slice_tail",
+  "slice_sample",
+  "left_join",
+  "right_join",
+  "inner_join",
+  "full_join",
+  "anti_join",
+  "semi_join",
+  "bind_rows",
+  "bind_cols",
+  "glimpse",
+  "head",
+  "tail",
+  "complete",
+  "replace_na",
+  "clean_names",
+}) do
+  PIPE_FUNCTIONS[name] = true
+end
+
+local function chain_rank(slot, items, keyword, objects)
+  local kinds = require("blink.cmp.types").CompletionItemKind
+  for _, item in ipairs(items) do
+    local kind = kinds[item.kind] or ""
+    local name = item.label:gsub("%(.*$", "")
+    local pkg = type(item.detail) == "string" and item.detail:match("^{(.+)}$")
+    local callable = CALLABLE_KINDS[kind] or objects[name] == "function" or item.label:match("%($")
+    local general = GENERAL_SOURCES[item.source_id] and not NEVER_TYPED[kind]
+    local boost = 0
+    if slot.chain == "ggplot" then
+      local part = false
+      for _, pat in ipairs(GGPLOT_PARTS) do
+        part = part or name:match(pat) ~= nil
+      end
+      if objects[name] == "layer" or (callable and part) then
+        boost = 6
+      elseif callable and pkg and GGPLOT_PACKAGES[pkg] then
+        boost = 3
+      elseif general and not callable then
+        boost = -4
+      end
+    else
+      if callable and PIPE_FUNCTIONS[name] then
+        boost = 8 -- the verbs themselves before dplyr's other functions
+      elseif callable and pkg and PIPE_PACKAGES[pkg] then
+        boost = 5
+      elseif callable and (name == "ggplot" or pkg == "ggplot2") then
+        boost = 3
+      elseif general and not callable then
+        boost = -8
+      end
+    end
+    if #keyword > 0 and item.label:sub(1, #keyword) == keyword then
+      boost = boost + 3
+    end
+    if boost ~= 0 then
+      item.score_offset = (item.score_offset or 0) + boost
+    end
+  end
+  return items
+end
+
 local function fits_slot(ctx, items)
   if ctx.mode == "cmdline" or #items == 0 then
     return items
@@ -319,6 +472,9 @@ local function fits_slot(ctx, items)
   local slot_lib = require("config.cmp-slot")
   local slot = slot_lib.here()
   local t = slot.type
+  if slot.where == "chain" then
+    return chain_rank(slot, items, ctx.get_keyword(), slot_lib.object_types("r"))
+  end
   -- After a space in quoted text (labs(title = "Fuel use by |), only
   -- Codeium's continuation, not every word in the buffer
   if t == "text" and slot.quoted and ctx.get_keyword() == "" then
@@ -351,7 +507,9 @@ local function fits_slot(ctx, items)
     -- The R server's package objects: `{grDevices}`, `{datasets}`, ...
     local pkg = type(item.detail) == "string" and item.detail:match("^{(.+)}$")
     local keep, boost = true, 0
-    if not GENERAL_SOURCES[item.source_id] or (is_arg(item) and slot.where == "arg") then
+    if t == "level" and is_arg(item) then
+      keep = false -- filter(df, sex == |: a value, not `.by = `
+    elseif not GENERAL_SOURCES[item.source_id] or (is_arg(item) and slot.where == "arg") then
       keep = true -- slot-specific sources (arg values, columns, colours) and argument names
     elseif item.source_id == "kernel" and next(objects) and not typed then
       -- The kernel lists base and package names too, all as plain
@@ -503,9 +661,37 @@ return {
       if type(fuzzy) == "function" then
         list.fuzzy = function(context, items_by_source)
           local ok, merged = pcall(drop_kernel_duplicates, items_by_source)
-          return fuzzy(context, ok and merged or items_by_source)
+          merged = ok and merged or items_by_source
+          local ok2, with_used = pcall(merge_used_values, merged)
+          return fuzzy(context, ok2 and with_used or merged)
         end
       end
+      -- `alpha=` with no space (the usual Python style): open the menu
+      -- right after the `=` when there are values for the argument (a
+      -- signature's choices, or values used elsewhere in the file). With a
+      -- space, show_on_blocked_trigger_characters below does it.
+      vim.api.nvim_create_autocmd("TextChangedI", {
+        group = vim.api.nvim_create_augroup("cmp_value_after_equals", { clear = true }),
+        callback = function()
+          local col = vim.api.nvim_win_get_cursor(0)[2]
+          if not vim.api.nvim_get_current_line():sub(1, col):match("[%w_]=$") then
+            return
+          end
+          local lang = region().lang
+          if
+            (lang == "python" or lang == "r")
+            and (require("config.cmp-arg-values").values_here() or require("config.cmp-used-values").any_here())
+          then
+            -- after blink has handled the `=` (which closes the menu)
+            local tick = vim.b.changedtick
+            vim.schedule(function()
+              if vim.b.changedtick == tick and vim.fn.mode() == "i" then
+                require("blink.cmp").show()
+              end
+            end)
+          end
+        end,
+      })
     end,
 
     opts = {
@@ -554,8 +740,9 @@ return {
           show_on_trigger_character = true,
           -- Spaces never open the menu, except right after an `=` in maths,
           -- so the result of `\frac{1+1}{5} = ` shows up (cmp-latex-calc.lua),
-          -- and after an R argument that takes one of a few values
-          -- (`method = `, cmp-arg-values.lua). Braces likewise only after
+          -- after an R argument that takes one of a few values (`method = `,
+          -- cmp-arg-values.lua) or was given a value elsewhere in the file
+          -- (`alpha = `, cmp-used-values.lua). Braces likewise only after
           -- `= \fbox{` (autopairs types `{}`), not in \frac{. Region checks
           -- only when one of those was typed.
           show_on_blocked_trigger_characters = function()
@@ -564,7 +751,18 @@ return {
             if (answer or before:match("[{}]$")) and region().kind == "math" then
               return answer and { "\n", "\t" } or { " ", "\n", "\t", "{", "}" }
             end
-            if before:match("[%w._]%s*=%s+$") and require("config.cmp-arg-values").values_here() then
+            if
+              before:match("[%w._]%s*=%s+$")
+              and (require("config.cmp-arg-values").values_here() or require("config.cmp-used-values").any_here())
+            then
+              return { "\n", "\t" }
+            end
+            -- after `sex == ` / `cyl %in% c(4, ` where the column's values
+            -- are known (cmp-columns.lua)
+            if
+              (before:match("[=!]=%s+$") or before:match(",%s+$"))
+              and require("config.cmp-slot").here().type == "level"
+            then
               return { "\n", "\t" }
             end
             -- and while writing text for people in quotes (labs(title =
@@ -750,6 +948,13 @@ return {
             score_offset = 10, -- above argument names and objects
             async = true,
             timeout_ms = 300,
+          },
+          -- 0.6 after alpha = when alpha = 0.6 is written elsewhere in the
+          -- file (cmp-used-values.lua); just under the signature's values
+          used_values = {
+            name = "Used",
+            module = "config.cmp-used-values",
+            score_offset = 8,
           },
           -- "steelblue", "tab:blue" where a colour goes (cmp-colours.lua)
           colours = {

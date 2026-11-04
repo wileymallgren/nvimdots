@@ -5,6 +5,8 @@
 --
 -- the header of data/cars.csv is read and `df$`, `df[["`, `df |> select(`,
 -- `ggplot(df, aes(`, `df["`, `df.groupby("` and `df.` offer its columns.
+-- Where a column is compared (`filter(species == "`, `df["sex"] == "`)
+-- its values are offered instead (source.value_context).
 -- Frames made from another one (`d2 <- df |> mutate(kpl = …)`) get its
 -- columns, plus the ones mutate/summarise/rename create. With the R / Python
 -- kernel running (lua/config/kernel/), the columns come from the session
@@ -18,10 +20,12 @@ function source.new()
   return setmetatable({}, { __index = source })
 end
 
--- `$` in R, `.` in Python (df.col); quotes and `[` for df["col"]
+-- `$` in R, `.` in Python (df.col); quotes and `[` for df["col"]. Space
+-- too, for the values after `sex == ` (blink blocks it everywhere else,
+-- see show_on_blocked_trigger_characters in completion.lua)
 function source:get_trigger_characters()
   local lang = context.region().lang
-  return lang == "r" and { "$", '"', "'", "[" } or lang == "python" and { ".", '"', "'", "[" } or {}
+  return lang == "r" and { "$", '"', "'", "[", " " } or lang == "python" and { ".", '"', "'", "[", " " } or {}
 end
 
 -- Functions that read a delimited text file with a header row
@@ -68,7 +72,35 @@ local function split(line, delim)
   return fields
 end
 
--- path -> { mtime, columns = { { name, example } } }
+-- One line's fields: split() when it has quotes, a plain split otherwise
+-- (much faster on the thousands of lines read_values goes through)
+local function fields(line, delim)
+  if not delim then
+    return vim.split(vim.trim(line), "%s+")
+  elseif line:find('"', 1, true) then
+    return split(line, delim)
+  end
+  local out = vim.split(line, delim, { plain = true })
+  for i, f in ipairs(out) do
+    out[i] = vim.trim(f)
+  end
+  return out
+end
+
+-- Delimiter of a header line: the most common of tab, comma and
+-- semicolon; nil for whitespace
+local function delimiter(header)
+  local delim, most = nil, 0
+  for _, d in ipairs({ "\t", ",", ";" }) do
+    local n = select(2, header:gsub(d, ""))
+    if n > most then
+      delim, most = d, n
+    end
+  end
+  return delim
+end
+
+-- path -> { mtime, columns = { { name, example, path, index } } }
 local header_cache = {}
 local function read_header(path)
   local stat = vim.uv.fs_stat(path)
@@ -86,24 +118,13 @@ local function read_header(path)
   local header = (f:read("*l") or ""):gsub("^\239\187\191", ""):gsub("\r$", "") -- no BOM / CR
   local first = (f:read("*l") or ""):gsub("\r$", "")
   f:close()
-  -- Delimiter: the most common of tab, comma and semicolon; else whitespace
-  local delim, most = nil, 0
-  for _, d in ipairs({ "\t", ",", ";" }) do
-    local n = select(2, header:gsub(d, ""))
-    if n > most then
-      delim, most = d, n
-    end
-  end
-  local names, values
-  if delim then
-    names, values = split(header, delim), split(first, delim)
-  else
-    names, values = vim.split(vim.trim(header), "%s+"), vim.split(vim.trim(first), "%s+")
-  end
+  local delim = delimiter(header)
+  local names, values = fields(header, delim), fields(first, delim)
   local columns = {}
   for i, name in ipairs(names) do
     if name ~= "" then
-      columns[#columns + 1] = { name = name, example = values[i] }
+      -- path / index: where read_values finds this column's values
+      columns[#columns + 1] = { name = name, example = values[i], path = path, index = i }
     end
   end
   header_cache[path] = { mtime = stat.mtime.sec, columns = columns }
@@ -402,6 +423,292 @@ local function find_context(lang, before)
   end
 end
 
+---------- Values of a column, where one is compared ----------
+--
+--   df |> filter(species == "|      ->  setosa  versicolor  virginica
+--   filter(df, cyl %in% c(4, |       ->  8  4  6  (no quotes: numbers)
+--   df$sex == "|   df[["sex"]] != |   df["sex"] == "|   df["sex"].isin(["|
+--
+-- From the running kernel (factor levels, or the distinct values when
+-- there are few), else from the file the frame was read from.
+
+local MAX_VALUES, MAX_NUMBERS = 50, 20
+local MAX_ROWS, MAX_BYTES = 5000, 1024 * 1024
+
+-- path -> { mtime, by_index = { [i] = { values = { { value, count } }, quote } | false } }
+local values_cache = {}
+
+local NUMBER = "^[%-%+]?%d*%.?%d+[eE]?[%-%+]?%d*$"
+local MISSING = { [""] = true, NA = true, NaN = true, ["NULL"] = true, nan = true, None = true }
+
+-- The distinct values of column `index` of the delimited file `path`, most
+-- common first, or nil when it has too many (or the file can't be read).
+-- Reads at most MAX_ROWS rows; each file once per change.
+local function read_values(path, index)
+  local stat = vim.uv.fs_stat(path)
+  if not stat or stat.type ~= "file" then
+    return nil
+  end
+  local c = values_cache[path]
+  if not (c and c.mtime == stat.mtime.sec) then
+    c = { mtime = stat.mtime.sec, by_index = {} }
+    values_cache[path] = c
+    local f = io.open(path, "r")
+    if not f then
+      return nil
+    end
+    local header = (f:read("*l") or ""):gsub("^\239\187\191", ""):gsub("\r$", "")
+    local delim = delimiter(header)
+    local counts, bytes, rows = {}, 0, 0
+    for line in f:lines() do
+      rows, bytes = rows + 1, bytes + #line
+      if rows > MAX_ROWS or bytes > MAX_BYTES then
+        break
+      end
+      for i, v in ipairs(fields((line:gsub("\r$", "")), delim)) do
+        local col = counts[i]
+        if col == nil then
+          col = { n = 0, seen = {} }
+          counts[i] = col
+        end
+        if col and not MISSING[v] then
+          if not col.seen[v] then
+            col.n = col.n + 1
+            col.seen[v] = 0
+          end
+          col.seen[v] = col.seen[v] + 1
+          if col.n > MAX_VALUES then
+            counts[i] = false -- too many to be choices
+          end
+        end
+      end
+    end
+    f:close()
+    for i, col in pairs(counts) do
+      if col then
+        local list, numeric, logical = {}, true, true
+        for v, n in pairs(col.seen) do
+          list[#list + 1] = { value = v, count = n }
+          numeric = numeric and v:match(NUMBER) ~= nil
+          logical = logical and (v == "TRUE" or v == "FALSE" or v == "True" or v == "False")
+        end
+        table.sort(list, function(a, b)
+          return a.count > b.count or (a.count == b.count and a.value < b.value)
+        end)
+        if #list > 0 and not (numeric and #list > MAX_NUMBERS) then
+          c.by_index[i] = { values = list, quote = not (numeric or logical) }
+        end
+      end
+    end
+  end
+  return c.by_index[index] or nil
+end
+
+-- R: `col` in a data verb, `df$col`, df[["col"]]. Python: df["col"], df.col
+local function compared(lang, lhs)
+  if lang == "r" then
+    local df, col = lhs:match("([%a._][%w._]*)%$`?([^`$]+)`?$")
+    if df then
+      return df, col
+    end
+    df, col = lhs:match("([%a._][%w._]*)%[%[%s*[\"']([^\"']+)[\"']%s*%]%]$")
+    if df then
+      return df, col
+    end
+    col = lhs:match("%f[%w._`]`([^`]+)`$") or lhs:match("%f[%w._]([%a._][%w._]*)$")
+    if not col then
+      return nil
+    end
+    -- The frame the verb works on (as find_context does for column names)
+    for _, call in ipairs(context.open_calls()) do
+      local name = call.name:match("[^:]+$")
+      if verbs[name] then
+        local first = call.args:match("^%s*([%a._][%w._]*)%s*,")
+        local root = chain_root(call.before) or first
+        if root then
+          return root, col
+        end
+      end
+    end
+    return nil
+  end
+  local df, col = lhs:match("([%a_][%w_]*)%[%s*[\"']([^\"']+)[\"']%s*%]$")
+  if not df then
+    -- df.col only for a known data frame: not self.state, np.pi
+    df, col = lhs:match("([%a_][%w_]*)%.([%a_][%w_]*)$")
+    local known = df
+      and (
+        frames(vim.api.nvim_get_current_buf(), lang)[df]
+        or require("config.cmp-slot").object_types(lang)[df] == "data"
+      )
+    if not known then
+      return nil
+    end
+  end
+  return df, col
+end
+
+-- { df, column, partial, quoted } where a value of a column goes, or nil
+function source.value_context(lang, before)
+  if lang ~= "r" and lang ~= "python" then
+    return nil
+  end
+  local q = open_quote(before)
+  local pre, partial
+  if q then
+    pre, partial = before:sub(1, q - 1), before:sub(q + 1)
+  else
+    partial = before:match("[%w._%-]*$")
+    pre = before:sub(1, #before - #partial)
+  end
+  -- What's compared: `lhs ==`, `lhs !=`, `lhs %in% c(…, `, `lhs.isin([…, `
+  local lhs = pre:match("^(.-)%s*[=!]=%s*$")
+  if not lhs and lang == "r" then
+    lhs = pre:match("^(.-)%s*%%in%%%s*c%([^()]*$")
+    if lhs and not pre:match("%(%s*$") and not pre:match(",%s*$") then
+      lhs = nil
+    end
+  elseif not lhs then
+    lhs = pre:match("^(.-)%.isin%(%[[^%[%]]*$")
+    if lhs and not pre:match("%[%s*$") and not pre:match(",%s*$") then
+      lhs = nil
+    end
+  end
+  if not lhs then
+    return nil
+  end
+  -- Values already in the c(…) / isin([…]): not offered again
+  local given = {}
+  local list = pre:match("c%(([^()]*)$") or pre:match("isin%(%[([^%[%]]*)$")
+  for v in (list or ""):gmatch("[^,]+") do
+    given[vim.trim(v):gsub("^[\"']", ""):gsub("[\"']$", "")] = true
+  end
+  local df, column = compared(lang, lhs)
+  if df then
+    return { df = df, column = column, partial = partial, quoted = q ~= nil, given = given }
+  end
+end
+
+local R_VALUES = [==[
+local({
+  if (is.data.frame(%s) && %s %%in%% names(%s)) {
+    v <- %s[[%s]]
+    cap <- if (is.factor(v)) 100 else if (is.numeric(v)) %d else %d
+    # count first: table() of a long numeric column is slow
+    n <- if (is.factor(v)) nlevels(v) else length(unique(v))
+    if (n > 0 && n <= cap) {
+      t <- if (is.factor(v)) table(v) else sort(table(v), decreasing = TRUE)
+      cat(if (is.character(v) || is.factor(v)) "s" else "n", paste(names(t), t, sep = "\t"), sep = "\n")
+    }
+  }
+})]==]
+
+local PY_VALUES = [[
+def __nvim_values():
+    import pandas as pd
+    s = %s[%s]
+    if isinstance(s.dtype, pd.CategoricalDtype):
+        vc = s.value_counts(sort=False)
+        cap, quote = 100, s.cat.categories.dtype == object
+    else:
+        num = pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
+        cap, quote = (%d if num else %d), not (num or pd.api.types.is_bool_dtype(s))
+        if s.nunique() > cap:
+            return
+        vc = s.value_counts()
+    if 0 < len(vc) <= cap:
+        print("s" if quote else "n")
+        for v, n in vc.items():
+            print(f"{v}\t{n}")
+try:
+    __nvim_values()
+finally:
+    del __nvim_values]]
+
+-- "col" as a string literal of R / Python
+local function literal(s)
+  return '"' .. s:gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+end
+
+-- lang:df:col -> { result, time }, kept VALUES_MS
+local values_kernel_cache = {}
+local VALUES_MS = 2000
+
+-- cb(result or nil): the kernel's values of df's column, as read_values
+local function kernel_values(lang, df, column, cb)
+  local key = table.concat({ lang, df, column }, ":")
+  local hit = values_kernel_cache[key]
+  if hit and vim.uv.now() - hit.time < VALUES_MS then
+    return cb(hit.result)
+  end
+  local session = require("config.kernel.session")
+  local k = session.find(lang, 0)
+  if not k or k.state ~= "idle" then
+    return cb(nil)
+  end
+  local col = literal(column)
+  local code = lang == "r" and R_VALUES:format(df, col, df, df, col, MAX_NUMBERS, MAX_VALUES)
+    or PY_VALUES:format(df, col, MAX_NUMBERS, MAX_VALUES)
+  session.eval(k, code, function(text, ok)
+    local result
+    local kind, rest = (text or ""):match("^([sn])\n(.*)$")
+    if ok and kind then
+      result = { values = {}, quote = kind == "s" }
+      for v, n in rest:gmatch("([^\t\n]*)\t(%d+)") do
+        result.values[#result.values + 1] = { value = v, count = tonumber(n) }
+      end
+    end
+    values_kernel_cache[key] = { result = result, time = vim.uv.now() }
+    cb(result)
+  end)
+end
+
+-- Items for a column's values
+local function value_items(ctx, found, result)
+  local row, col = ctx.cursor[1] - 1, ctx.cursor[2]
+  local range = { start = { line = row, character = col - #found.partial }, ["end"] = { line = row, character = col } }
+  local kind = require("blink.cmp.types").CompletionItemKind.EnumMember
+  local items = {}
+  for i, v in ipairs(result.values) do
+    local text = v.value
+    if result.quote and not found.quoted then
+      text = '"' .. text:gsub('"', '\\"') .. '"'
+    end
+    if not found.given[v.value] then
+      items[#items + 1] = {
+        label = text,
+        filterText = v.value,
+        kind = kind,
+        labelDetails = { description = ("×%d"):format(v.count) },
+        documentation = ("Value of `%s` in `%s`"):format(found.column, found.df),
+        textEdit = { newText = text, range = range },
+        sortText = ("%04d"):format(i), -- most common first
+      }
+    end
+  end
+  return items
+end
+
+local function column_values(ctx, found, lang, callback)
+  kernel_values(lang, found.df, found.column, function(result)
+    if not result then
+      local cols = frames(ctx.bufnr, lang)[found.df]
+      for _, c in ipairs(cols or {}) do
+        if c.name == found.column and c.path then
+          result = read_values(c.path, c.index)
+          break
+        end
+      end
+    end
+    callback({
+      items = result and value_items(ctx, found, result) or {},
+      -- in / out of quotes changes the items
+      is_incomplete_forward = true,
+      is_incomplete_backward = true,
+    })
+  end)
+end
+
 function source:enabled()
   local lang = context.region().lang
   return lang == "python" or lang == "r"
@@ -483,6 +790,10 @@ end
 -- names they replace. `only` = after df$ or in df["…"], where nothing but a
 -- column fits, so the language server's guesses can go.
 function source.known_here(ctx)
+  -- (a column's values go here, not its name)
+  if source.value_context(context.region(ctx.bufnr).lang, ctx.line:sub(1, ctx.cursor[2])) then
+    return nil
+  end
   local cols, found = lookup(ctx)
   if not cols then
     return nil
@@ -495,6 +806,11 @@ function source.known_here(ctx)
 end
 
 function source:get_completions(ctx, callback)
+  local lang_here = context.region(ctx.bufnr).lang
+  local compared_here = source.value_context(lang_here, ctx.line:sub(1, ctx.cursor[2]))
+  if compared_here then
+    return column_values(ctx, compared_here, lang_here, callback)
+  end
   local found, lang = context_at(ctx)
   if not found then
     return callback(EMPTY)
