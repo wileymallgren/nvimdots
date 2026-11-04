@@ -37,9 +37,10 @@
     "body": [
       "---",
       "title: \"${1:$TM_FILENAME_BASE}\"",
-      "author: \"${2:Author}\"",
+      "subtitle: \"${2:Subtitle}\"",
+      "author: \"${3:Author}\"",
       "date: \"$CURRENT_YEAR-$CURRENT_MONTH-$CURRENT_DATE\"",
-      "output: ${3:html_document}",
+      "output: pdf_document",
       "---",
       "",
       "$0"
