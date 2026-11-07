@@ -1,0 +1,38 @@
+# clangd user config. Neovim symlinks it into place on start when nothing is
+# there yet (lua/plugins/lsp.lua): ~/Library/Preferences/clangd/config.yaml on
+# macOS, ~/.config/clangd/config.yaml on Linux.
+#
+# Without these flags clangd (like Apple clang++) uses C++14, so modern code
+# such as std::views shows false errors. The flags are appended to every
+# compile command, including a project's compile_commands.json. A project that
+# needs another standard puts its own in a .clangd file at its root, which is
+# applied after this one, so its flag wins:
+#   CompileFlags:
+#     Add: [-std=c++17]
+
+If:
+  PathMatch: .*\.(cpp|cc|cxx|c\+\+|hpp|hh|hxx|h|ipp|tpp)
+CompileFlags:
+  Add: [-std=c++20, -Wall, -Wextra]
+---
+If:
+  PathMatch: .*\.c
+CompileFlags:
+  Add: [-std=c17, -Wall, -Wextra]
+---
+Diagnostics:
+  # Shown as warnings; they point out common mistakes and older styles.
+  ClangTidy:
+    Add:
+      - bugprone-*
+      - performance-*
+      - modernize-*
+    Remove:
+      - modernize-use-trailing-return-type # int f() -> auto f() -> int
+      - modernize-avoid-c-arrays
+      - bugprone-easily-swappable-parameters
+  UnusedIncludes: Strict
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true

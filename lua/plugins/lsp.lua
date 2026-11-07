@@ -216,6 +216,29 @@ return {
         end,
       })
 
+      -- clangd: C++20 / C17 flags, clang-tidy checks and inlay hints come
+      -- from clangd/config.yaml in this repo. clangd only reads its user
+      -- config from its own folder, so link it there unless a file exists.
+      do
+        local dir = vim.fn.has("mac") == 1 and vim.fn.expand("~/Library/Preferences/clangd")
+          or ((vim.env.XDG_CONFIG_HOME or vim.fn.expand("~/.config")) .. "/clangd")
+        local target = dir .. "/config.yaml"
+        if not vim.uv.fs_lstat(target) then
+          vim.fn.mkdir(dir, "p")
+          vim.uv.fs_symlink(vim.fn.stdpath("config") .. "/clangd/config.yaml", target)
+        end
+      end
+      vim.lsp.config("clangd", {
+        cmd = {
+          "clangd",
+          "--clang-tidy",
+          "--completion-style=detailed", -- one item per overload
+          "--header-insertion=iwyu", -- completing std::vector adds #include <vector>
+          "--function-arg-placeholders=true",
+          "--enable-config",
+        },
+      })
+
       vim.lsp.config("lua_ls", {
         settings = {
           Lua = {

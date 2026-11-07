@@ -23,6 +23,7 @@ return {
         { "<leader>R", group = "Remote", icon = { icon = "", color = "blue" } },
         { "<leader>c", group = "Code / cwd", icon = { icon = "", color = "orange" } },
         { "<localleader>k", group = "Knit", icon = { cat = "extension", name = "rmd" } },
+        { "<leader>D", group = "Debug", icon = { icon = "", color = "red" } },
         -- R / Python kernels (lua/config/kernel/); only shown in buffers that
         -- have these keys
         {
@@ -63,6 +64,9 @@ return {
         { "<leader>cv", icon = { cat = "filetype", name = "csv" } },
         { "<leader>ca", icon = { icon = "󰁨", color = "yellow" } },
         { "<leader>cA", icon = { icon = "󰁨", color = "orange" } },
+        -- Debugger (lua/plugins/dap.lua)
+        { "<leader>b", icon = { icon = "●", color = "red" } },
+        { "<leader>B", icon = { icon = "◆", color = "red" } },
         { "<leader>a", icon = { icon = "", color = "purple" } },
         { "<leader>A", icon = { icon = "", color = "purple" } },
       },

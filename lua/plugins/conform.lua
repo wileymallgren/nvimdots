@@ -43,6 +43,17 @@ return {
       r = { "styler" },
     },
     formatters = {
+      -- Without a .clang-format file clang-format uses LLVM style, which
+      -- indents by 2 while the editor indents by 4. A project's own
+      -- .clang-format still wins.
+      clang_format = {
+        prepend_args = function(_, ctx)
+          if vim.fs.find({ ".clang-format", "_clang-format" }, { upward = true, path = ctx.dirname })[1] then
+            return {}
+          end
+          return { "--style={BasedOnStyle: LLVM, IndentWidth: 4}" }
+        end,
+      },
       injected = {
         -- A chunk the formatter can't parse (e.g. `%matplotlib inline`) is
         -- left as is instead of failing the whole buffer
