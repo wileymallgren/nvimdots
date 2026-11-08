@@ -124,8 +124,6 @@ plus `gd`:
 
 ## Opinionated defaults you may want to change
 
-- **hardtime.nvim** is always on (in hint mode): it nags about repeated `hjkl` and similar habits. Delete
-  `lua/plugins/hardtime.lua` to turn it off.
 - **Mouse wheel scrolling is disabled** at the top of `lua/config/keymaps.lua`.
 - **`<Esc>` closes Telescope** straight from insert mode.
 - **The R / Python console starts hidden**: `\rH` shows it. Set `SHOW_ON_START = true` in
