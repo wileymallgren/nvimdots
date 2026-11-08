@@ -13,12 +13,12 @@
 If:
   PathMatch: .*\.(cpp|cc|cxx|c\+\+|hpp|hh|hxx|h|ipp|tpp)
 CompileFlags:
-  Add: [-std=c++20, -Wall, -Wextra]
+  Add: [-std=c++20, -Wall, -Wextra, -Wfloat-equal, -Wdouble-promotion, -Wshadow]
 ---
 If:
   PathMatch: .*\.c
 CompileFlags:
-  Add: [-std=c17, -Wall, -Wextra]
+  Add: [-std=c17, -Wall, -Wextra, -Wfloat-equal, -Wdouble-promotion, -Wshadow]
 ---
 Diagnostics:
   # Shown as warnings; they point out common mistakes and older styles.
@@ -31,6 +31,7 @@ Diagnostics:
       - modernize-use-trailing-return-type # int f() -> auto f() -> int
       - modernize-avoid-c-arrays
       - bugprone-easily-swappable-parameters
+      - bugprone-random-generator-seed # fixed seeds are deliberate: reproducible Monte Carlo
   UnusedIncludes: Strict
 InlayHints:
   Enabled: true

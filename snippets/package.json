@@ -6,7 +6,8 @@
       { "language": ["r"], "path": "./r.json" },
       { "language": ["python"], "path": "./python.json" },
       { "language": ["rmd", "quarto"], "path": "./rmd.json" },
-      { "language": ["markdown"], "path": "./markdown.json" }
+      { "language": ["markdown"], "path": "./markdown.json" },
+      { "language": ["cpp"], "path": "./cpp.json" }
     ]
   }
 }

@@ -272,6 +272,11 @@ local function snippets_as_completions(ctx, items)
   if keyword:match("^%d+$") and #keyword < 4 then
     return {}
   end
+  -- In a member list (after `.`, `::` ...) the word alone never matches, so
+  -- `x.fo` doesn't offer `for`; the whole run still does (`std::mt` offers
+  -- `std::mt19937_64 gen{42};`)
+  local member = ctx.trigger.initial_kind == "trigger_character"
+  local shortest = member and #keyword + 1 or math.max(#keyword, 1)
   local out = {}
   for _, item in ipairs(items) do
     local body = item.textEdit and item.textEdit.newText or item.insertText or ""
@@ -280,7 +285,7 @@ local function snippets_as_completions(ctx, items)
       -- Longest piece of what was typed that the snippet's text starts with:
       -- at least the current word, plus whatever comes before it, so
       -- ```{r, --- and "# Appendix" work too
-      for n = #run, math.max(#keyword, 1), -1 do
+      for n = #run, shortest, -1 do
         local typed = run:sub(-n)
         if starts_with(text, typed) then
           local first = text:match("^[^\n]*")
@@ -861,10 +866,8 @@ return {
             override = { get_completions = lsp_with_signature },
           },
           snippets = {
-            -- No `for`/`if` snippets in member lists after `.`, `:` etc.
-            should_show_items = function(ctx)
-              return ctx.trigger.initial_kind ~= "trigger_character"
-            end,
+            -- No `for`/`if` snippets in member lists after `.`, `:` etc.:
+            -- snippets_as_completions only matches the whole run there
             transform_items = snippets_as_completions,
             -- The source says its list never changes as you type, so blink
             -- would keep fuzzy-matching the first list (`gp` would still

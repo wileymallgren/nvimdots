@@ -51,6 +51,7 @@ return {
       "r",
       "cpp",
       "c",
+      "asm", -- assembly view in C / C++ (lua/config/cpp.lua)
       "java",
       "toml",
       "dockerfile",

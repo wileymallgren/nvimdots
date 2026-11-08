@@ -1,0 +1,50 @@
+{
+  "time a block": {
+    "prefix": "timeit",
+    "description": "Time a block with steady_clock (needs <chrono>, <iostream>)",
+    "body": [
+      "auto t0 = std::chrono::steady_clock::now();",
+      "$0",
+      "auto t1 = std::chrono::steady_clock::now();",
+      "std::cout << \"${1:took} \" << std::chrono::duration<double, std::milli>(t1 - t0).count() << \" ms\\n\";"
+    ]
+  },
+  "random numbers": {
+    "prefix": "rng",
+    "description": "Seeded 64-bit Mersenne Twister and a standard normal (needs <random>)",
+    "body": [
+      "std::mt19937_64 gen{${1:42}}; // fixed seed: the same numbers every run",
+      "std::normal_distribution<double> z{0.0, 1.0};",
+      "$0"
+    ]
+  },
+  "monte carlo": {
+    "prefix": "mc",
+    "description": "Monte Carlo loop: mean and standard error (needs <cmath>, <random>, <iostream>)",
+    "body": [
+      "const long n = ${1:1'000'000};",
+      "double sum = 0.0, sum_sq = 0.0;",
+      "for (long i = 0; i < n; ++i) {",
+      "    double x = ${2:z(gen)};",
+      "    $0",
+      "    sum += x;",
+      "    sum_sq += x * x;",
+      "}",
+      "const double mean = sum / n;",
+      "const double std_err = std::sqrt((sum_sq / n - mean * mean) / (n - 1));",
+      "std::cout << mean << \" ± \" << std_err << '\\n';"
+    ]
+  },
+  "fixed precision": {
+    "prefix": "fixed",
+    "description": "Print doubles with a fixed number of decimals (needs <iomanip>)",
+    "body": ["std::cout << std::fixed << std::setprecision(${1:6});"]
+  },
+  "approximately equal": {
+    "prefix": "approx",
+    "description": "Compare doubles with a tolerance instead of == (needs <algorithm>, <cmath>)",
+    "body": [
+      "std::abs(${1:a} - ${2:b}) <= ${3:1e-9} * std::max({1.0, std::abs($1), std::abs($2)})"
+    ]
+  }
+}
