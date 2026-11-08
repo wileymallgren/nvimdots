@@ -642,6 +642,22 @@ return {
       enable_cmp_source = false, -- Disable legacy nvim-cmp wrapper
       virtual_text = { enabled = false }, -- suggestions go through blink.cmp instead
     },
+    config = function(_, opts)
+      require("codeium").setup(opts)
+      -- A slow Codeium round trip comes back as {"code":"deadline_exceeded"}.
+      -- codeium.nvim already stays quiet for "canceled" / 503 / 408 but
+      -- not this one, so it pops up as an error while typing. It only means
+      -- no suggestion this time: log it instead. Other errors still show.
+      local notify = require("codeium.notify")
+      local error_fn = notify.error
+      notify.error = function(message, ...)
+        if type(message) == "string" and message:find("deadline_exceeded", 1, true) then
+          require("codeium.log").debug(message)
+          return
+        end
+        return error_fn(message, ...)
+      end
+    end,
   },
 
   -- Completion menu
