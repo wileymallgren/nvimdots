@@ -24,20 +24,9 @@ return {
         { "<leader>c", group = "Code / cwd", icon = { icon = "", color = "orange" } },
         { "<localleader>k", group = "Knit", icon = { cat = "extension", name = "rmd" } },
         { "<leader>D", group = "Debug", icon = { icon = "", color = "red" } },
-        -- R / Python kernels (lua/config/kernel/); only shown in buffers that
-        -- have these keys
-        {
-          mode = { "n", "v" },
-          icon = { cat = "filetype", name = "r" },
-          { "<localleader>m", group = "Chunks: run / outputs" },
-          { "<localleader>r", group = "Kernel, console & objects" },
-          { "<localleader>s", group = "Send selection" },
-          { "<localleader>c", group = "Run chunk(s)" },
-          { "<localleader>f", group = "Send function" },
-          { "<localleader>p", group = "Send paragraph" },
-          { "<localleader>a", group = "Send / run all" },
-          { "<localleader>g", group = "Go to chunk" },
-        },
+        -- R / Python kernel groups (\m \r \s ...) are added per buffer in
+        -- lua/config/kernel/init.lua, so C / C++ keys on the same letters
+        -- keep their own labels
         -- Render (lua/config/tex-preview.lua)
         { "<leader>rp", mode = { "n", "v" }, icon = { icon = "", color = "azure" } },
         { "<leader>rm", mode = { "n", "v" }, icon = { cat = "filetype", name = "markdown" } },

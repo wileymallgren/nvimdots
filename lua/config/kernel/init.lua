@@ -58,6 +58,40 @@ local function with_kernel(fn)
   end
 end
 
+-- which-key group labels for the prefixes above, in this buffer only: as
+-- global labels they'd also name C / C++ keys on the same letters (\r, \a)
+local GROUPS = {
+  m = "Chunks: run / outputs",
+  r = "Kernel, console & objects",
+  s = "Send selection",
+  c = "Run chunk(s)",
+  f = "Send function",
+  p = "Send paragraph",
+  a = "Send / run all",
+  g = "Go to chunk",
+}
+local function add_group_labels(buf)
+  local spec = { buffer = buf, mode = { "n", "v" }, icon = { cat = "filetype", name = "r" } }
+  for key, label in pairs(GROUPS) do
+    spec[#spec + 1] = { "<localleader>" .. key, group = label }
+  end
+  -- which-key loads on VeryLazy; requiring it earlier (the first file's
+  -- FileType) would load it before its time
+  if package.loaded["which-key"] then
+    require("which-key").add(spec)
+  else
+    vim.api.nvim_create_autocmd("User", {
+      pattern = "VeryLazy",
+      once = true,
+      callback = function()
+        pcall(function()
+          require("which-key").add(spec)
+        end)
+      end,
+    })
+  end
+end
+
 function M.attach(buf)
   local send = require("config.kernel.send")
   local console = require("config.kernel.console")
@@ -140,6 +174,8 @@ function M.attach(buf)
     vim.keymap.set("i", "<localleader>,", objects.insert_pipe, { buffer = buf, expr = true, desc = "Insert |>" })
   end
 
+  -- (before the notebook-only keys: scripts have groups too)
+  add_group_labels(buf)
   if not require("config.kernel.chunks").is_notebook(buf) then
     return
   end
