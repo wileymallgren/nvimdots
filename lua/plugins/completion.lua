@@ -644,14 +644,35 @@ return {
     },
     config = function(_, opts)
       require("codeium").setup(opts)
-      -- A slow Codeium round trip comes back as {"code":"deadline_exceeded"}.
-      -- codeium.nvim already stays quiet for "canceled" / 503 / 408 but
-      -- not this one, so it pops up as an error while typing. It only means
-      -- no suggestion this time: log it instead. Other errors still show.
+      -- Network trouble reaches codeium.nvim as a failed completion request:
+      -- a slow round trip is {"code":"deadline_exceeded"}, and being offline
+      -- (or DNS failing) is {"code":"unknown","message":"unavailable: dial
+      -- tcp ... no such host"}. codeium.nvim already stays quiet for
+      -- "canceled" / 503 / 408 but not these, so they pop up as errors on
+      -- every keystroke. They only mean no suggestion this time: log them
+      -- instead. Other errors (auth, bad responses) still show.
+      local transient = { deadline_exceeded = true, unavailable = true }
+      local prefix = "completion request failed: "
+      local function is_transient(message)
+        if type(message) ~= "string" or message:sub(1, #prefix) ~= prefix then
+          return false
+        end
+        local ok, body = pcall(vim.json.decode, message:sub(#prefix + 1))
+        if not ok or type(body) ~= "table" then
+          return false
+        end
+        if transient[body.code] then
+          return true
+        end
+        -- The language server wraps transport errors as "unknown" and puts
+        -- the real code at the start of the message.
+        local inner = type(body.message) == "string" and body.message:match("^([%w_]+):")
+        return inner ~= nil and transient[inner] == true
+      end
       local notify = require("codeium.notify")
       local error_fn = notify.error
       notify.error = function(message, ...)
-        if type(message) == "string" and message:find("deadline_exceeded", 1, true) then
+        if is_transient(message) then
           require("codeium.log").debug(message)
           return
         end
