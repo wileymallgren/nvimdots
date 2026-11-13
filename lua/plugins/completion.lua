@@ -643,6 +643,25 @@ return {
       virtual_text = { enabled = false }, -- suggestions go through blink.cmp instead
     },
     config = function(_, opts)
+      -- The language server sends completion requests to a built-in
+      -- https://inference.codeium.com, which has been removed from DNS
+      -- (NXDOMAIN on every resolver as of 2026-11), so every request fails
+      -- with "dial tcp: lookup inference.codeium.com: no such host" and
+      -- blink never gets an item. The API server (api.host) answers them
+      -- too: start the server with it as the inference URL. codeium.nvim
+      -- has no option for extra server flags, so add it where the job is
+      -- made.
+      local cio = require("codeium.io")
+      local make_job = cio.job
+      cio.job = function(args)
+        if type(args[1]) == "string" and args[1]:match("language_server") then
+          if not vim.tbl_contains(args, "--inference_api_server_url") then
+            local api = require("codeium.config").options.api
+            vim.list_extend(args, { "--inference_api_server_url", "https://" .. api.host .. ":" .. api.port })
+          end
+        end
+        return make_job(args)
+      end
       require("codeium").setup(opts)
       -- Network trouble reaches codeium.nvim as a failed completion request:
       -- a slow round trip is {"code":"deadline_exceeded"}, and being offline
