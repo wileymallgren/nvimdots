@@ -625,6 +625,41 @@ local function region_words(ctx, items)
   end, items)
 end
 
+-- Codeium's best guess goes first, above even an exact match, when it is
+-- likely the best item in the menu:
+--   * Codeium is sure of it: score -1 or better. Over sampled requests, the
+--     ones above that were right (`ret` -> `return a + b`, `su` ->
+--     `sum(values)`, `rad` -> `radius * radius * height`); the ones below
+--     were guesses (filter(mpg > 20), groupby on made-up columns, prose).
+--   * it still starts with what's typed, checked again on every keystroke:
+--     blink reuses Codeium's items as the word grows, so a suggestion made
+--     for `re` must not stay on top once `res` no longer fits it.
+--   * it adds more than the word: Codeium completing `rad` to just `radius`
+--     is no better than the language server's `radius`, which has docs.
+-- Otherwise Codeium keeps its place below the language server.
+local CODEIUM_SURE = -1.0
+local function codeium_first(ctx, items)
+  local keyword = ctx.get_keyword()
+  local best_i, best_score
+  for i, item in ipairs(items) do
+    local score = item.source_id == "codeium" and item.codeium_score
+    local text = score and item.textEdit and item.textEdit.newText
+    if
+      text
+      and score >= CODEIUM_SURE
+      and (not best_score or score > best_score)
+      and text:sub(1, #keyword) == keyword
+      and text:sub(#text:match("^[%w_.]*") + 1):match("%S")
+    then
+      best_i, best_score = i, score
+    end
+  end
+  if best_i and best_i > 1 then
+    table.insert(items, 1, table.remove(items, best_i))
+  end
+  return items
+end
+
 -- Buffer words come from every loaded file buffer, not only visible ones
 local function file_buffers()
   return vim.tbl_filter(function(buf)
@@ -724,7 +759,11 @@ return {
           local ok, merged = pcall(drop_kernel_duplicates, items_by_source)
           merged = ok and merged or items_by_source
           local ok2, with_used = pcall(merge_used_values, merged)
-          return fuzzy(context, ok2 and with_used or merged)
+          -- Moved after blink's sort rather than with a Lua sort function,
+          -- which would take sorting out of Rust on every keystroke
+          local sorted = fuzzy(context, ok2 and with_used or merged)
+          local ok3, ranked = pcall(codeium_first, context, sorted)
+          return ok3 and ranked or sorted
         end
       end
       -- `alpha=` with no space (the usual Python style): open the menu
@@ -1068,7 +1107,8 @@ return {
               end
               return items
             end,
-            -- Just below LSP, so Tab (super-tab) accepts the LSP item first
+            -- Just below LSP, so Tab (super-tab) accepts the LSP item first,
+            -- unless Codeium is sure of a longer completion (codeium_first)
             score_offset = -2,
             max_items = 3,
           },

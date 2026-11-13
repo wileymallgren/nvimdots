@@ -125,6 +125,10 @@ local function codeium_to_item(comp, offset, right)
     kind_hl_group = "BlinkCmpKindCopilot",
     kind_icon = "󰘦",
     textEdit = { newText = insert_text, insert = range, replace = range },
+    -- Codeium's own confidence: about a length-normalised log-probability,
+    -- so near 0 is sure and below -1 is a guess (codeium_first in
+    -- lua/plugins/completion.lua)
+    codeium_score = tonumber(comp.completion.score),
   }
 end
 
