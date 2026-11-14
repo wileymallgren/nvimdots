@@ -171,6 +171,49 @@ function M.is_import(c)
   return calls_any(code, lang.import_funcs, lang.frontier) or calls_any(code, lang.setup_funcs, lang.frontier)
 end
 
+-- The data a chunk works on, for the workspace's data pane (workspace.lua):
+-- what it assigns (`x <- df %>% ...` makes x), else the head of a pipe
+-- (`df %>%`, `df |>`, `df.groupby(...)`), else ggplot(df / data = df, else
+-- the first argument of a call starting a line (head(df), plot(df$x)).
+-- nil if none of those is there.
+local R_NAME, PY_NAME = "[%a.][%w._]*", "[%a_][%w_]*"
+local DATA_PATTERNS = {
+  r = {
+    "^%s*(" .. R_NAME .. ")%s*<<?%-",
+    "^%s*(" .. R_NAME .. ")%s*%%>%%",
+    "^%s*(" .. R_NAME .. ")%s*|>",
+    "ggplot%(%s*(" .. R_NAME .. ")",
+    "data%s*=%s*(" .. R_NAME .. ")",
+    "^%s*[%a.][%w._:]*%(%s*(" .. R_NAME .. ")%s*[,)$[]", -- head(df), plot(df$x)
+  },
+  python = {
+    "^%s*(" .. PY_NAME .. ")%s*=[^=]",
+    "^%s*(" .. PY_NAME .. ")%.",
+    "data%s*=%s*(" .. PY_NAME .. ")",
+    "^%s*[%a_][%w_.]*%(%s*(" .. PY_NAME .. ")%s*[,)%[.]", -- print(df), len(df.x)
+  },
+}
+local NOT_DATA = { ["function"] = true, ["TRUE"] = true, ["FALSE"] = true, ["NULL"] = true, ["NA"] = true }
+
+function M.data_name(c, buf)
+  local pats = DATA_PATTERNS[c.lang]
+  if not pats then
+    return nil
+  end
+  local lines = M.body(c, buf)
+  for i, l in ipairs(lines) do
+    lines[i] = (l:gsub("#.*$", ""))
+  end
+  for _, pat in ipairs(pats) do
+    for _, l in ipairs(lines) do
+      local name = l:match(pat)
+      if name and not NOT_DATA[name] and not name:match("^%.") then
+        return name
+      end
+    end
+  end
+end
+
 -- eval=FALSE in an R Markdown header, or `#| eval: false` (Quarto) on the
 -- chunk's first line.
 function M.is_skipped(c)

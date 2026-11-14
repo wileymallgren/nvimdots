@@ -5,6 +5,9 @@
 -- closing fence.
 --   run(c), run_all(upto, filter), delete(), clear_all(), toggle_hidden(),
 --   open_float(), outputs(buf) (for lua/config/cmp-codeium.lua)
+--   set_inline(buf, on): off shows nothing under the chunks, not even the
+--   status (the workspace's side pane shows it all, workspace.lua)
+--   on_update(fn(buf, out)): called after every render of an output
 
 local session = require("config.kernel.session")
 local chunks = require("config.kernel.chunks")
@@ -27,6 +30,8 @@ for name, link in pairs({
 end
 
 local state = {} -- buf -> { [mark id] = output }
+local no_inline = {} -- buf -> true while only the status shows (set_inline)
+local listeners = {} -- on_update
 local start_clock -- (defined below)
 
 local function outputs_of(buf)
@@ -96,12 +101,27 @@ local function status_line(out)
   return line
 end
 
+M.status_line = status_line
+
+local render_inline
+
 local function render(buf, out)
   local pos = vim.api.nvim_buf_get_extmark_by_id(buf, ns, out.id, {})
   if not pos or not pos[1] then
     return
   end
-  local row = pos[1]
+  if no_inline[buf] then
+    clear_images(out)
+    vim.api.nvim_buf_set_extmark(buf, ns, pos[1], 0, { id = out.id })
+  else
+    render_inline(buf, out, pos[1])
+  end
+  for _, fn in ipairs(listeners) do
+    pcall(fn, buf, out)
+  end
+end
+
+render_inline = function(buf, out, row)
   local win = vim.fn.bufwinid(buf)
   local width = (win ~= -1 and vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff or 80) - 4
   local lines, n_text, slots, truncated = { status_line(out) }, 0, {}, 0
@@ -354,6 +374,19 @@ end
 -- The output under chunk `c` (nil if none): { items, status, count, ... }
 function M.get(buf, c)
   return find(buf, c)
+end
+
+-- Show outputs under their chunks (`on`), or nothing at all (the outputs
+-- are still kept and updated).
+function M.set_inline(buf, on)
+  no_inline[buf] = not on or nil
+  for _, out in pairs(state[buf] or {}) do
+    render(buf, out)
+  end
+end
+
+function M.on_update(fn)
+  table.insert(listeners, fn)
 end
 
 -- Show `items` (see collect()) as chunk `c`'s finished output, e.g. the
@@ -625,7 +658,7 @@ vim.api.nvim_create_autocmd("BufWipeout", {
     for _, out in pairs(state[ev.buf] or {}) do
       clear_images(out)
     end
-    state[ev.buf] = nil
+    state[ev.buf], no_inline[ev.buf] = nil, nil
   end,
 })
 

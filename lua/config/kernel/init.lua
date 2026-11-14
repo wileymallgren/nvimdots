@@ -25,6 +25,9 @@
 --   \mu           run the chunks above, then this one (only this one's output
 --                 shows under its chunk; the others show in the console)
 --   \mR           restart the kernel(s), then run the chunks above
+--   \mw           workspace: run the chunks above + this one, with this
+--                 chunk's output and its data in a column on the right
+--                 (follows the cursor; \mw again closes it; workspace.lua)
 --   \mI           run library / data-import chunks
 --   \mr           (visual) run the selection, output under its chunk
 --   \md \mD       delete this / all outputs    \mh  hide / show this output
@@ -213,6 +216,9 @@ function M.attach(buf)
   end, "Run all R chunks (console only, nothing inline)")
   map("n", "mu", inline.run_upto_cursor, "Run chunks above + this one (output only here)")
   map("n", "mR", inline.restart_and_run_above, "Restart kernel(s), run the chunks above")
+  map("n", "mw", function()
+    require("config.kernel.workspace").toggle()
+  end, "Workspace: run above + this chunk, output & data on the right")
   map("n", "mI", function()
     inline.run_all(nil, chunks.is_import)
   end, "Run library/data-import chunks")

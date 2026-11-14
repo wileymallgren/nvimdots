@@ -63,8 +63,8 @@ local function word(lang)
   return w
 end
 
-local function kernel(lang, on_ready)
-  return session.ensure(lang, vim.api.nvim_get_current_buf(), on_ready)
+local function kernel(lang, buf)
+  return session.ensure(lang, buf or vim.api.nvim_get_current_buf())
 end
 
 -- Run fn(name) on the object under the cursor in the console.
@@ -102,8 +102,13 @@ end
 
 -- View the data frame (anything as.data.frame / pd.DataFrame takes) in a
 -- csvview tab. Real row names / a non-default index become the first column.
-function M.view(name)
-  local lang = lang_here()
+-- opts: lang (default: the cursor's), win (show it in that window instead,
+-- see r-view-df.lua), df_only (refuse anything but data frames / matrices),
+-- quiet (no warning when it can't be shown), buf (whose kernel: default
+-- the current buffer's).
+function M.view(name, opts)
+  opts = opts or {}
+  local lang = opts.lang or lang_here()
   name = name or (lang and word(lang))
   if not name then
     return
@@ -112,25 +117,28 @@ function M.view(name)
   local code
   if lang == "r" then
     code = ([[local({
-  o <- as.data.frame(%s)
+  o <- %s
+  if (%s && !is.data.frame(o) && !is.matrix(o)) stop("not a data frame")
+  o <- as.data.frame(o)
   if (nrow(o) > 50000) o <- head(o, 50000)
   if (!identical(row.names(o), as.character(seq_len(nrow(o))))) o <- setNames(cbind(row.names(o), o), c("", names(o)))
   write.table(o, %s, sep = "\t", quote = FALSE, row.names = FALSE, na = "NA", fileEncoding = "UTF-8")
-})]]):format(name, quote(path))
+})]]):format(name, opts.df_only and "TRUE" or "FALSE", quote(path))
   else
-    code = ([[(lambda pd, d: d.to_csv(%s, sep="\t", index=not isinstance(d.index, pd.RangeIndex)))(__import__("pandas"), __import__("pandas").DataFrame(%s).head(50000))]]):format(
+    code = ([[(lambda pd, o: (_ for _ in ()).throw(TypeError("not a data frame")) if %s and not isinstance(o, (pd.DataFrame, pd.Series)) else (lambda d: d.to_csv(%s, sep="\t", index=not isinstance(d.index, pd.RangeIndex)))(pd.DataFrame(o).head(50000)))(__import__("pandas"), %s)]]):format(
+      opts.df_only and "True" or "False",
       quote(path),
       name
     )
   end
-  local k = kernel(lang)
+  local k = kernel(lang, opts.buf)
   if not k then
     return
   end
   session.eval(k, code, function(_, ok, err)
     if ok and vim.fn.filereadable(path) == 1 then
-      require("config.r-view-df").open(path, name)
-    else
+      require("config.r-view-df").open(path, name, opts.win)
+    elseif not opts.quiet then
       vim.notify(("Can't view %s: %s"):format(name, vim.trim(err or "")), vim.log.levels.WARN)
     end
   end)
@@ -207,8 +215,10 @@ function M.help()
 end
 
 -- The objects in the session, one per line: name, class, dimensions.
-function M.list_objects()
-  local lang = lang_here()
+-- opts.on_pick(name): what <CR> on one does (default: view it).
+function M.list_objects(opts)
+  opts = opts or {}
+  local lang = opts.lang or lang_here()
   if not lang then
     return
   end
@@ -252,8 +262,14 @@ function M.list_objects()
     vim.keymap.set("n", "<CR>", function()
       local name = vim.api.nvim_get_current_line():match("^(%S+)")
       vim.cmd.close()
-      vim.api.nvim_set_current_win(src)
-      M.view(name)
+      if vim.api.nvim_win_is_valid(src) then
+        vim.api.nvim_set_current_win(src)
+      end
+      if opts.on_pick then
+        opts.on_pick(name)
+      else
+        M.view(name)
+      end
     end, { buffer = buf })
   end)
 end
