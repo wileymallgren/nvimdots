@@ -105,7 +105,7 @@ end
 -- opts: lang (default: the cursor's), win (show it in that window instead,
 -- see r-view-df.lua), df_only (refuse anything but data frames / matrices),
 -- quiet (no warning when it can't be shown), buf (whose kernel: default
--- the current buffer's).
+-- the current buffer's), on_result(ok, err) (called once it ran).
 function M.view(name, opts)
   opts = opts or {}
   local lang = opts.lang or lang_here()
@@ -136,10 +136,14 @@ function M.view(name, opts)
     return
   end
   session.eval(k, code, function(_, ok, err)
-    if ok and vim.fn.filereadable(path) == 1 then
+    ok = ok and vim.fn.filereadable(path) == 1
+    if ok then
       require("config.r-view-df").open(path, name, opts.win)
     elseif not opts.quiet then
       vim.notify(("Can't view %s: %s"):format(name, vim.trim(err or "")), vim.log.levels.WARN)
+    end
+    if opts.on_result then
+      opts.on_result(ok, err)
     end
   end)
 end
@@ -215,7 +219,8 @@ function M.help()
 end
 
 -- The objects in the session, one per line: name, class, dimensions.
--- opts.on_pick(name): what <CR> on one does (default: view it).
+-- opts.on_pick(name): what <CR> on one does (default: view it); opts.lang /
+-- opts.buf: whose kernel (default: the cursor's code / current buffer).
 function M.list_objects(opts)
   opts = opts or {}
   local lang = opts.lang or lang_here()
@@ -231,7 +236,7 @@ function M.list_objects(opts)
   }
 })]]
     or [[(lambda g: [print(f"{n:24} {type(v).__name__:14} {getattr(v, 'shape', '')}") for n, v in list(g.items()) if not n.startswith("_") and type(v).__name__ not in ("module", "function", "type", "builtin_function_or_method")])(globals())]]
-  local k = kernel(lang)
+  local k = kernel(lang, opts.buf)
   if not k then
     return
   end

@@ -2,10 +2,11 @@
 -- (console only) and then the cursor's chunk, and opens a column on the
 -- right with
 --   top     the output of the chunk under the cursor (follows the cursor;
---           plots drawn with image.nvim, <CR> on [plot] views it big)
---   bottom  the data that chunk works on (chunks.data_name: `df %>% ...`
---           shows df), refreshed each time the chunk finishes running; when
---           \mw finds none it lets you pick from the session's objects
+--           plots drawn with image.nvim, <CR> on one views it big)
+--   bottom  the data that chunk works on (chunks.data_names: `df %>% ...`
+--           shows df; follows the cursor too), loaded again whenever a
+--           chunk finishes running; when \mw finds none it lets you pick
+--           from the session's objects
 -- Plots fill the output pane and re-fit when it is resized; while it is
 -- open R draws plots in the pane's shape and wraps text at its width.
 -- While it is open, chunk output (and its status) doesn't show inline.
@@ -14,11 +15,16 @@
 local chunks = require("config.kernel.chunks")
 local inline = require("config.kernel.inline")
 local objects = require("config.kernel.objects")
+local session = require("config.kernel.session")
 
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("kernel-workspace")
 local layouts = {} -- tabpage -> layout
+
+-- Rows a plot leaves free in the output pane: the header line, and one
+-- because image.nvim crops a plot that reaches the window's last row.
+local PLOT_MARGIN = 2
 
 local WIN_OPTS = {
   number = false,
@@ -80,6 +86,7 @@ local function render_output(L)
   local c = L.idx and chunks.find(L.src_buf)[L.idx]
   local out = c and inline.get(L.src_buf, c)
   local lines, hls, plots = {}, {}, {}
+  local plot_rows = {} -- line -> plot shown on it (<CR> views it)
   local function add(text, hl)
     table.insert(lines, text)
     if hl then
@@ -100,24 +107,27 @@ local function render_output(L)
       add("Not run yet", "Comment")
     else
       local width, height = vim.api.nvim_win_get_width(L.out_win), vim.api.nvim_win_get_height(L.out_win)
-      local n_plots, n_text = 0, 0
+      local n_plots, text_rows = 0, 0
       for _, item in ipairs(out.items) do
         if item.kind == "image" then
           n_plots = n_plots + 1
         else
-          n_text = n_text + #vim.split((item.text:gsub("\n$", "")), "\n", { plain = true })
+          -- screen rows, with the long lines wrapped
+          for _, l in ipairs(vim.split((item.text:gsub("\n$", "")), "\n", { plain = true })) do
+            text_rows = text_rows + math.max(1, math.ceil(vim.fn.strdisplaywidth(after_cr(l)) / width))
+          end
         end
       end
-      -- A plot fills the pane: a lone one the room the text leaves, several
-      -- a pane height each (scroll through them)
-      local rows = n_plots == 1 and height - 2 - n_text or height - 2
-      rows = math.max(8, rows)
+      -- A plot fills the pane: a lone one the room the header and text
+      -- leave, several a pane height each (scroll through them). One row
+      -- spare: image.nvim crops a plot that reaches the window's last row.
+      local rows = math.max(8, (n_plots == 1 and height - text_rows or height) - PLOT_MARGIN)
       for _, item in ipairs(out.items) do
         if item.kind == "image" then
-          add("[plot]  <CR> to view", "Special")
           table.insert(plots, { row = #lines, path = item.path, rows = rows, width = width })
           for _ = 1, rows do
             add("")
+            plot_rows[#lines] = item.path
           end
         else
           local hl = out.stale and "NonText" or item.hl
@@ -133,10 +143,7 @@ local function render_output(L)
   for row, hl in pairs(hls) do
     vim.api.nvim_buf_set_extmark(L.out_buf, ns, row - 1, 0, { end_row = row, hl_group = hl, hl_eol = false })
   end
-  L.plots = {}
-  for _, p in ipairs(plots) do
-    L.plots[p.row] = p.path
-  end
+  L.plots = plot_rows
 
   -- Plots are only re-placed when they (or the pane) changed, so the
   -- running clock doesn't make them flicker
@@ -156,7 +163,7 @@ local function render_output(L)
           window = L.out_win,
           buffer = L.out_buf,
           x = 0,
-          y = p.row, -- the line after [plot] (0-based)
+          y = p.row, -- its first (blank) line, 0-based
           width = p.width,
           height = p.rows,
           inline = false,
@@ -173,8 +180,14 @@ local function render_output(L)
   end
 end
 
+local close -- (defined below)
+
 local function render(L)
   if L.rendering or not valid(L.out_win) then
+    return
+  end
+  if not vim.api.nvim_buf_is_valid(L.out_buf) or vim.api.nvim_win_get_buf(L.out_win) ~= L.out_buf then
+    close(L) -- the pane lost its buffer (winfixbuf keeps it, but :bwipe doesn't ask)
     return
   end
   L.rendering = true
@@ -185,23 +198,90 @@ local function render(L)
   end
 end
 
--- Show the data chunk `c` works on in the data pane. `pick`: when the chunk
--- names none, choose from the session's objects.
-local function show_data(L, c, pick)
-  if not valid(L.data_win) then
+-- Show the data the followed chunk works on in the data pane: the first of
+-- its chunks.data_names that is a data frame in the session. It loads
+-- again when that changes or a chunk ran since it loaded (the data may have
+-- changed). `pick`: when there is none, choose from the session's objects.
+local function show_data(L, pick)
+  local c = L.idx and chunks.find(L.src_buf)[L.idx]
+  if not c or not valid(L.data_win) then
     return
   end
-  local name = chunks.data_name(c, L.src_buf)
-  if name then
-    objects.view(name, { win = L.data_win, lang = c.lang, buf = L.src_buf, quiet = true, df_only = true })
-  elseif pick then
+  local function choose()
     objects.list_objects({
       lang = c.lang,
+      buf = L.src_buf,
       on_pick = function(n)
         objects.view(n, { win = L.data_win, lang = c.lang, buf = L.src_buf })
+        L.shown = n
       end,
     })
   end
+  local names = chunks.data_names(c, L.src_buf)
+  local k = session.find(c.lang, L.src_buf)
+  if #names == 0 or not k then
+    if pick and k then
+      choose()
+    end
+    return
+  end
+  local quoted = table.concat(
+    vim.tbl_map(function(n)
+      return '"' .. n .. '"'
+    end, names),
+    ", "
+  )
+  local code = c.lang == "r"
+      and ([[cat(Find(function(n) { o <- get0(n, envir = globalenv()); is.data.frame(o) || is.matrix(o) }, c(%s)), "")]]):format(
+        quoted
+      )
+    or ([[print(next((n for n in [%s] if isinstance(globals().get(n), (__import__("pandas").DataFrame, __import__("pandas").Series))), ""))]]):format(
+      quoted
+    )
+  local dirty = L.dirty
+  L.dirty = false
+  session.eval(k, code, function(text, ok)
+    local name = ok and vim.trim(text) or ""
+    if L.closed or not valid(L.data_win) then
+      return
+    elseif name == "" then
+      if pick then
+        choose()
+      elseif not L.shown and vim.api.nvim_win_get_buf(L.data_win) == L.placeholder then
+        set_lines(L.placeholder, { ("No data frame yet: %s"):format(table.concat(names, ", ")) })
+      end
+    elseif name ~= L.shown or dirty then
+      objects.view(name, {
+        win = L.data_win,
+        lang = c.lang,
+        buf = L.src_buf,
+        quiet = true,
+        on_result = function(viewed)
+          if viewed then
+            L.shown = name
+          end
+        end,
+      })
+    end
+  end)
+end
+
+-- show_data once things settle (cursor moves, runs finishing one after
+-- another in a run-all).
+local function show_data_soon(L, ms, pick)
+  L.pick = L.pick or pick
+  L.data_timer = L.data_timer or vim.uv.new_timer()
+  L.data_timer:start(
+    ms,
+    0,
+    vim.schedule_wrap(function()
+      if not L.closed then
+        local p = L.pick
+        L.pick = false
+        show_data(L, p)
+      end
+    end)
+  )
 end
 
 -- Make R's next output fit the output pane: text as wide as the pane
@@ -209,11 +289,11 @@ end
 -- they had are kept in .nvim_ws_opts and put back on close. Python output
 -- keeps its own sizes.
 local function fit_kernel(L)
-  local k = require("config.kernel.session").find("r", L.src_buf)
+  local k = session.find("r", L.src_buf)
   if not k or not valid(L.out_win) then
     return
   end
-  local cols, rows = vim.api.nvim_win_get_width(L.out_win), vim.api.nvim_win_get_height(L.out_win) - 2
+  local cols, rows = vim.api.nvim_win_get_width(L.out_win), vim.api.nvim_win_get_height(L.out_win) - PLOT_MARGIN
   local cw, ch = 1, 2 -- cell width : height, when the terminal doesn't say
   local ok, term = pcall(function()
     return require("image.utils.term").get_size()
@@ -226,13 +306,13 @@ local function fit_kernel(L)
   o <- options(width = %d, repr.plot.width = 7, repr.plot.height = %.2f)
   if (!exists(".nvim_ws_opts", globalenv())) assign(".nvim_ws_opts", o, globalenv())
 })]]):format(math.max(40, cols - 1), h)
-  require("config.kernel.session").eval(k, code, function() end)
+  session.eval(k, code, function() end)
 end
 
 local function unfit_kernel(L)
-  local k = require("config.kernel.session").find("r", L.src_buf)
+  local k = session.find("r", L.src_buf)
   if k then
-    require("config.kernel.session").eval(
+    session.eval(
       k,
       [[if (exists(".nvim_ws_opts", globalenv())) { options(.nvim_ws_opts); rm(".nvim_ws_opts", envir = globalenv()) }]],
       function() end
@@ -240,7 +320,7 @@ local function unfit_kernel(L)
   end
 end
 
-local function close(L)
+close = function(L)
   if L.closed then
     return
   end
@@ -253,31 +333,61 @@ local function close(L)
       pcall(vim.api.nvim_win_close, win, true)
     end
   end
-  if L.fit_timer then
-    L.fit_timer:stop()
-    L.fit_timer:close()
+  for _, t in pairs({ L.fit_timer or false, L.data_timer or false }) do
+    if t then
+      t:stop()
+      t:close()
+    end
   end
-  unfit_kernel(L)
-  if vim.api.nvim_buf_is_valid(L.src_buf) then
+  -- (another tab's workspace may still use the buffer / the kernel options)
+  local others, same_buf = false, false
+  for _, o in pairs(layouts) do
+    others = true
+    same_buf = same_buf or o.src_buf == L.src_buf
+  end
+  if not others then
+    unfit_kernel(L)
+  end
+  if not same_buf and vim.api.nvim_buf_is_valid(L.src_buf) then
     inline.set_inline(L.src_buf, true)
   end
 end
 
--- Output updates: re-render when they are the followed chunk's; when it
--- finishes running, refresh the data pane.
+-- A restarted (or newly started) R kernel has R's default sizes again.
+session.observe({
+  change = function(k)
+    if k.lang == "r" and k.state == "starting" then
+      for _, L in pairs(layouts) do
+        fit_kernel(L)
+      end
+    end
+  end,
+})
+
+-- Output updates: re-render when they are the followed chunk's. Any chunk
+-- finishing may have changed the data, so the data pane loads again.
 inline.on_update(function(buf, out)
   for _, L in pairs(layouts) do
     if L.src_buf == buf and not L.rendering then
       local c = L.idx and chunks.find(buf)[L.idx]
-      if c and inline.get(buf, c) == out then
+      local is_followed = c ~= nil and inline.get(buf, c) == out
+      if is_followed and not L.opening then
         render(L)
-        if out.status == "done" or out.status == "error" then
-          local key = ("%d:%s:%s"):format(out.id, tostring(out.count), tostring(out.elapsed))
-          if key ~= L.data_key then
-            L.data_key = key
-            show_data(L, c, L.first_run)
+      end
+      if out.status == "done" or out.status == "error" then
+        local key = ("%s:%s"):format(tostring(out.count), tostring(out.elapsed))
+        if L.opening then
+          L.seen[out.id] = key -- ran before \mw: not a new run
+        elseif L.seen[out.id] ~= key then
+          L.seen[out.id] = key
+          L.dirty = true
+          -- the first time \mw's own chunk finishes, a chunk without a
+          -- data name lets you pick one
+          local pick = is_followed and L.first_run
+          if is_followed then
             L.first_run = false
           end
+          show_data_soon(L, 150, pick)
         end
       end
     end
@@ -299,6 +409,7 @@ local function open()
     idx = i,
     images = {},
     plots = {},
+    seen = {}, -- output id -> the finished run last seen
     first_run = true,
   }
 
@@ -310,15 +421,16 @@ local function open()
   vim.api.nvim_win_set_buf(L.out_win, L.out_buf)
   vim.cmd("rightbelow split")
   L.data_win = vim.api.nvim_get_current_win()
-  local placeholder = scratch("data")
-  set_lines(placeholder, { "The data the chunk works on shows here" })
-  vim.api.nvim_win_set_buf(L.data_win, placeholder)
+  L.placeholder = scratch("data")
+  set_lines(L.placeholder, { "The data the chunk works on shows here" })
+  vim.api.nvim_win_set_buf(L.data_win, L.placeholder)
   for _, win in ipairs({ L.out_win, L.data_win }) do
     for opt, val in pairs(WIN_OPTS) do
       vim.wo[win][opt] = val -- (not [0]: they stay when the data pane loads a new table)
     end
   end
   vim.wo[L.out_win].wrap = true
+  vim.wo[L.out_win].winfixbuf = true -- :e / :bnext / pickers can't replace the output
   vim.wo[L.out_win].cursorline = false
   vim.api.nvim_set_current_win(src_win)
 
@@ -338,18 +450,37 @@ local function open()
     group = L.group,
     buffer = src_buf,
     callback = function()
+      -- the notebook may be in another window too: follow the one in use
+      local win = vim.api.nvim_get_current_win()
+      if win ~= L.out_win and win ~= L.data_win and vim.api.nvim_win_get_tabpage(win) == L.tab then
+        L.src_win = win
+      end
       local _, idx = followed(L)
       if idx and idx ~= L.idx then
         L.idx = idx
         render(L)
+        show_data_soon(L, 250)
       end
     end,
   })
   vim.api.nvim_create_autocmd("WinClosed", {
     group = L.group,
-    pattern = { tostring(L.out_win), tostring(L.data_win), tostring(src_win) },
-    callback = function()
-      vim.schedule(close_it)
+    callback = function(ev)
+      local win = tonumber(ev.match)
+      if win == L.out_win or win == L.data_win then
+        vim.schedule(close_it)
+      elseif win == L.src_win then
+        vim.schedule(function()
+          -- the notebook still shown in another window of the tab: follow that
+          for _, w in ipairs(valid(L.out_win) and vim.api.nvim_tabpage_list_wins(L.tab) or {}) do
+            if vim.api.nvim_win_get_buf(w) == L.src_buf then
+              L.src_win = w
+              return
+            end
+          end
+          close_it()
+        end)
+      end
     end,
   })
   vim.api.nvim_create_autocmd("WinResized", {
@@ -370,12 +501,18 @@ local function open()
   vim.api.nvim_create_autocmd("BufWipeout", { group = L.group, buffer = src_buf, callback = close_it })
 
   layouts[tab] = L
+  L.opening = true -- (outputs from before \mw re-render here: not new runs)
   inline.set_inline(src_buf, false)
+  L.opening = false
   render(L)
   if c.lang == "r" then
-    -- before the runs (the kernel runs requests in order)
-    require("config.kernel.session").ensure("r", src_buf)
-    fit_kernel(L)
+    -- before the runs (the kernel runs requests in order); a kernel that
+    -- starts now gets them from the observer above
+    if session.find("r", src_buf) then
+      fit_kernel(L)
+    else
+      session.ensure("r", src_buf)
+    end
   end
   inline.run_upto_cursor()
 end
@@ -384,9 +521,11 @@ function M.toggle()
   local L = layouts[vim.api.nvim_get_current_tabpage()]
   if L then
     close(L)
-  else
-    open()
+    if L.src_buf == vim.api.nvim_get_current_buf() then
+      return
+    end
   end
+  open() -- (\mw in another notebook moves the workspace to it)
 end
 
 return M

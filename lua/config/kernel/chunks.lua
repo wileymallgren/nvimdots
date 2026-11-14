@@ -171,11 +171,13 @@ function M.is_import(c)
   return calls_any(code, lang.import_funcs, lang.frontier) or calls_any(code, lang.setup_funcs, lang.frontier)
 end
 
--- The data a chunk works on, for the workspace's data pane (workspace.lua):
--- what it assigns (`x <- df %>% ...` makes x), else the head of a pipe
--- (`df %>%`, `df |>`, `df.groupby(...)`), else ggplot(df / data = df, else
--- the first argument of a call starting a line (head(df), plot(df$x)).
--- nil if none of those is there.
+-- Names of the data a chunk may work on, most likely first, for the
+-- workspace's data pane (workspace.lua), which shows the first one that is
+-- a data frame in the session: what it assigns (`x <- df %>% ...` makes
+-- x), the head of a pipe (`df %>%`, `df |>`, `df.groupby(...)`),
+-- ggplot(df / data = df, the first argument of a call starting a line
+-- (head(df), plot(df$x)). Python assignments only count unindented (an
+-- indented `data=df,` is an argument of a call that goes on).
 local R_NAME, PY_NAME = "[%a.][%w._]*", "[%a_][%w_]*"
 local DATA_PATTERNS = {
   r = {
@@ -187,18 +189,28 @@ local DATA_PATTERNS = {
     "^%s*[%a.][%w._:]*%(%s*(" .. R_NAME .. ")%s*[,)$[]", -- head(df), plot(df$x)
   },
   python = {
-    "^%s*(" .. PY_NAME .. ")%s*=[^=]",
+    "^(" .. PY_NAME .. ")%s*=[^=]",
     "^%s*(" .. PY_NAME .. ")%.",
     "data%s*=%s*(" .. PY_NAME .. ")",
     "^%s*[%a_][%w_.]*%(%s*(" .. PY_NAME .. ")%s*[,)%[.]", -- print(df), len(df.x)
   },
 }
-local NOT_DATA = { ["function"] = true, ["TRUE"] = true, ["FALSE"] = true, ["NULL"] = true, ["NA"] = true }
+local NOT_DATA = {
+  ["function"] = true,
+  ["TRUE"] = true,
+  ["FALSE"] = true,
+  ["NULL"] = true,
+  ["NA"] = true,
+  ["None"] = true,
+  ["True"] = true,
+  ["False"] = true,
+}
 
-function M.data_name(c, buf)
+function M.data_names(c, buf)
   local pats = DATA_PATTERNS[c.lang]
+  local names, seen = {}, {}
   if not pats then
-    return nil
+    return names
   end
   local lines = M.body(c, buf)
   for i, l in ipairs(lines) do
@@ -207,11 +219,13 @@ function M.data_name(c, buf)
   for _, pat in ipairs(pats) do
     for _, l in ipairs(lines) do
       local name = l:match(pat)
-      if name and not NOT_DATA[name] and not name:match("^%.") then
-        return name
+      if name and not NOT_DATA[name] and not name:match("^%.") and not seen[name] then
+        seen[name] = true
+        table.insert(names, name)
       end
     end
   end
+  return names
 end
 
 -- eval=FALSE in an R Markdown header, or `#| eval: false` (Quarto) on the
