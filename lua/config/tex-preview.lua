@@ -1,5 +1,6 @@
--- Inline preview of LaTeX / markdown snippets using the existing image.nvim
--- (kitty backend, works in Ghostty).
+-- Inline preview of LaTeX / markdown snippets, shown as virtual lines of
+-- image placeholders under the snippet (lua/config/image.lua: kitty,
+-- Ghostty).
 --
 -- Normal mode (all under <leader>r, "render"):
 --   <leader>rp  auto-detect what's under the cursor and render it:
@@ -50,6 +51,8 @@ local cfg = {
   jobs = 3, -- max parallel compiles for ta/ts
   msg_ms = 1500, -- how long success messages stay in the cmdline
   y_offset = -1, -- shift every image by this many lines (-1 = one line higher)
+  max_cols = 100, -- the most a preview takes (also no wider than the window)
+  max_rows = 12,
   -- colours (hex, no #). nil = take them from the active colorscheme:
   --   text = Normal fg, background = Normal bg
   fg = nil,
@@ -59,7 +62,31 @@ local cfg = {
   packages = "amsmath,amssymb,amsfonts,booktabs,multirow,array,xcolor,varwidth",
 }
 
-local previews = {} -- bufnr -> { [row] = image }
+local previews = {} -- bufnr -> { [row] = preview (:clear() removes it) }
+local image_ns = vim.api.nvim_create_namespace("tex_preview_images")
+
+-- The PNG at `path` in virtual lines under 0-based line `y` of `buf`, as
+-- wide as at most window `win`'s text. nil if it can't be shown.
+local function place(buf, win, y, path)
+  local textw = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+  local img = require("config.image").new(path, { max_cols = math.min(cfg.max_cols, textw), max_rows = cfg.max_rows })
+  if not img then
+    return nil
+  end
+  y = math.max(0, math.min(y, vim.api.nvim_buf_line_count(buf) - 1))
+  local id = vim.api.nvim_buf_set_extmark(buf, image_ns, y, 0, { virt_lines = img:virt_lines() })
+  local cleared = false
+  return {
+    clear = function()
+      if cleared then
+        return -- (the image may be shared: one delete per preview)
+      end
+      cleared = true
+      img:delete()
+      pcall(vim.api.nvim_buf_del_extmark, buf, image_ns, id)
+    end,
+  }
+end
 local last_dir -- temp dir of the most recent successful render (snip.tex / .pdf / .png)
 
 -- <Esc> closes previews if rendering them was the last thing you did.
@@ -490,43 +517,24 @@ local function render(buf, win, row, body, opts)
             vim.schedule(function()
               local ok_img = false
               if vim.api.nvim_win_is_valid(win) and vim.api.nvim_buf_is_valid(buf) then
-                local ok, image = pcall(require, "image")
-                if ok then
-                  local y = row + cfg.y_offset
-                  -- drop a stale preview on this row first so its padding isn't measured
-                  previews[buf] = previews[buf] or {}
-                  if previews[buf][row] then
-                    pcall(function()
-                      previews[buf][row]:clear()
-                    end)
-                    previews[buf][row] = nil
-                  end
-                  -- The anchor line may wrap. image.nvim anchors on the line's first
-                  -- screen row but the padding sits after ALL its wrapped rows, so push
-                  -- the image down by the number of wrapped continuation rows.
-                  local extra = 0
-                  local okh, h = pcall(vim.api.nvim_win_text_height, win, { start_row = y, end_row = y })
-                  if okh and h then
-                    extra = math.max((h.all - (h.fill or 0)) - 1, 0)
-                  end
-                  local img = image.from_file(dir .. "/snip.png", {
-                    window = win,
-                    buffer = buf,
-                    x = 0,
-                    y = y,
-                    with_virtual_padding = true,
-                    render_offset_top = extra,
-                  })
-                  if img then
-                    img:render()
-                    previews[buf][row] = img
-                    ok_img = true
-                    last_dir = dir
-                    -- only arm Esc if no key was pressed since the request
-                    if n == key_count then
-                      active = active or {}
-                      table.insert(active, { buf = buf, row = row })
-                    end
+                local y = row + cfg.y_offset
+                -- drop a stale preview on this row first
+                previews[buf] = previews[buf] or {}
+                if previews[buf][row] then
+                  pcall(function()
+                    previews[buf][row]:clear()
+                  end)
+                  previews[buf][row] = nil
+                end
+                local img = place(buf, win, y, dir .. "/snip.png")
+                if img then
+                  previews[buf][row] = img
+                  ok_img = true
+                  last_dir = dir
+                  -- only arm Esc if no key was pressed since the request
+                  if n == key_count then
+                    active = active or {}
+                    table.insert(active, { buf = buf, row = row })
                   end
                 end
               end

@@ -2,7 +2,8 @@
 -- (console only) and then the cursor's chunk, and opens a column on the
 -- right with
 --   top     the output of the chunk under the cursor (follows the cursor;
---           plots drawn with image.nvim, <CR> on one views it big)
+--           plots as image placeholders (lua/config/image.lua), <CR> on
+--           one views it big)
 --   bottom  the data that chunk works on (chunks.data_names: `df %>% ...`
 --           shows df; follows the cursor too), loaded again whenever a
 --           chunk finishes running; when \mw finds none it lets you pick
@@ -13,6 +14,7 @@
 -- \mw again, or q in the output pane, closes it and brings it back.
 
 local chunks = require("config.kernel.chunks")
+local image = require("config.image")
 local inline = require("config.kernel.inline")
 local objects = require("config.kernel.objects")
 local session = require("config.kernel.session")
@@ -22,9 +24,8 @@ local M = {}
 local ns = vim.api.nvim_create_namespace("kernel-workspace")
 local layouts = {} -- tabpage -> layout
 
--- Rows a plot leaves free in the output pane: the header line, and one
--- because image.nvim crops a plot that reaches the window's last row.
-local PLOT_MARGIN = 2
+-- Rows a plot leaves free in the output pane: the header line.
+local PLOT_MARGIN = 1
 
 local WIN_OPTS = {
   number = false,
@@ -63,8 +64,8 @@ local function set_lines(buf, lines)
 end
 
 local function clear_images(L)
-  for _, img in ipairs(L.images) do
-    pcall(img.clear, img)
+  for _, img in pairs(L.images) do
+    img:delete()
   end
   L.images, L.image_key = {}, nil
 end
@@ -85,7 +86,7 @@ end
 local function render_output(L)
   local c = L.idx and chunks.find(L.src_buf)[L.idx]
   local out = c and inline.get(L.src_buf, c)
-  local lines, hls, plots = {}, {}, {}
+  local lines, hls, overlays = {}, {}, {}
   local plot_rows = {} -- line -> plot shown on it (<CR> views it)
   local function add(text, hl)
     table.insert(lines, text)
@@ -94,6 +95,7 @@ local function render_output(L)
     end
   end
   if not c then
+    clear_images(L)
     add("Move into an R or Python chunk", "Comment")
   else
     local head = ("Chunk %d (%s)"):format(L.idx, c.lang == "r" and "R" or c.lang)
@@ -104,6 +106,7 @@ local function render_output(L)
     end
     add(head, "Title")
     if not out then
+      clear_images(L)
       add("Not run yet", "Comment")
     else
       local width, height = vim.api.nvim_win_get_width(L.out_win), vim.api.nvim_win_get_height(L.out_win)
@@ -119,14 +122,37 @@ local function render_output(L)
         end
       end
       -- A plot fills the pane: a lone one the room the header and text
-      -- leave, several a pane height each (scroll through them). One row
-      -- spare: image.nvim crops a plot that reaches the window's last row.
+      -- leave, several a pane height each (scroll through them)
       local rows = math.max(8, (n_plots == 1 and height - text_rows or height) - PLOT_MARGIN)
+      -- Plots are only sent to the terminal again when they (or the room
+      -- for them) changed, not on every clock tick
+      local paths = {}
       for _, item in ipairs(out.items) do
         if item.kind == "image" then
-          table.insert(plots, { row = #lines, path = item.path, rows = rows, width = width })
-          for _ = 1, rows do
-            add("")
+          table.insert(paths, item.path)
+        end
+      end
+      local key = table.concat(paths, ",") .. ":" .. rows .. "x" .. width
+      if key ~= L.image_key then
+        clear_images(L)
+        L.image_key = key
+        for i, path in ipairs(paths) do
+          L.images[i] = image.new(path, { max_cols = width, max_rows = rows, grow = true })
+        end
+      end
+      local n_img = 0
+      for _, item in ipairs(out.items) do
+        if item.kind == "image" then
+          n_img = n_img + 1
+          local img = L.images[n_img]
+          if img then
+            for r = 0, img.rows - 1 do
+              add("")
+              plot_rows[#lines] = item.path
+              overlays[#lines] = img:chunks(r)
+            end
+          else
+            add("[plot]  <CR> to view", "Comment")
             plot_rows[#lines] = item.path
           end
         else
@@ -143,41 +169,10 @@ local function render_output(L)
   for row, hl in pairs(hls) do
     vim.api.nvim_buf_set_extmark(L.out_buf, ns, row - 1, 0, { end_row = row, hl_group = hl, hl_eol = false })
   end
-  L.plots = plot_rows
-
-  -- Plots are only re-placed when they (or the pane) changed, so the
-  -- running clock doesn't make them flicker
-  local key = table.concat(
-    vim.tbl_map(function(p)
-      return p.path .. "@" .. p.row .. ":" .. p.rows .. "x" .. p.width
-    end, plots),
-    ","
-  )
-  if key ~= L.image_key then
-    clear_images(L)
-    L.image_key = key
-    local ok, image = pcall(require, "image")
-    if ok then
-      for _, p in ipairs(plots) do
-        local img = image.from_file(p.path, {
-          window = L.out_win,
-          buffer = L.out_buf,
-          x = 0,
-          y = p.row, -- its first (blank) line, 0-based
-          width = p.width,
-          height = p.rows,
-          inline = false,
-        })
-        if img then
-          -- past image.nvim's max_width / max_height (lua/plugins/image.lua,
-          -- sized for inline plots): the pane decides the size here
-          img.ignore_global_max_size = true
-          pcall(img.render, img)
-          table.insert(L.images, img)
-        end
-      end
-    end
+  for row, chunks_ in pairs(overlays) do
+    vim.api.nvim_buf_set_extmark(L.out_buf, ns, row - 1, 0, { virt_text = chunks_, virt_text_pos = "overlay" })
   end
+  L.plots = plot_rows
 end
 
 local close -- (defined below)
@@ -294,13 +289,7 @@ local function fit_kernel(L)
     return
   end
   local cols, rows = vim.api.nvim_win_get_width(L.out_win), vim.api.nvim_win_get_height(L.out_win) - PLOT_MARGIN
-  local cw, ch = 1, 2 -- cell width : height, when the terminal doesn't say
-  local ok, term = pcall(function()
-    return require("image.utils.term").get_size()
-  end)
-  if ok and term and (term.cell_width or 0) > 0 and (term.cell_height or 0) > 0 then
-    cw, ch = term.cell_width, term.cell_height
-  end
+  local cw, ch = image.cell_size()
   local h = 7 * math.max(0.3, math.min(3, (rows * ch) / (cols * cw)))
   local code = ([[local({
   o <- options(width = %d, repr.plot.width = 7, repr.plot.height = %.2f)

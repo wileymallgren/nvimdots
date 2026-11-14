@@ -76,13 +76,20 @@ local function build_dim_namespace()
   for name, _ in pairs(highlights) do
     local resolved = resolve(name)
     local new_def = vim.deepcopy(resolved)
-    if new_def.fg then
+    -- Image placeholders (lua/config/image.lua) carry the image id in their
+    -- colour: a dimmed one names no image and the terminal draws nothing
+    -- (image.set_dim() below points them at dimmed copies instead)
+    if new_def.fg and not name:match("^ConfigImage%d+$") then
       new_def.fg = blend_toward(new_def.fg, target, DIM_ALPHA)
     end
     -- Deliberately leave bg untouched -- only text should dim, not the
     -- window's background color.
     pcall(vim.api.nvim_set_hl, dim_ns, name, new_def)
   end
+  -- Plots and previews dim too: they switch to dimmed copies of themselves
+  pcall(function()
+    require("config.image").set_dim(dim_ns, target, DIM_ALPHA)
+  end)
 end
 
 build_dim_namespace()

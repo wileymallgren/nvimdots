@@ -1,5 +1,6 @@
 -- Chunk output shown inline under each chunk's closing fence (virtual
--- lines; plots drawn with image.nvim), plus a status on the fence line:
+-- lines; plots as image placeholders, lua/config/image.lua), plus a status
+-- on the fence line:
 -- running / done [execution count] and time / error. The code also shows
 -- in the console. Outputs follow edits (extmarks) and stay under the
 -- closing fence.
@@ -11,11 +12,12 @@
 
 local session = require("config.kernel.session")
 local chunks = require("config.kernel.chunks")
+local image = require("config.image")
 
 local M = {}
 
 local MAX_TEXT_LINES = 20 -- per chunk; \mo shows everything
-local IMAGE_ROWS = 12 -- rows reserved per plot (image.nvim max_height)
+local IMAGE_ROWS, IMAGE_COLS = 12, 100 -- the most a plot takes
 local ns = vim.api.nvim_create_namespace("kernel-inline")
 
 for name, link in pairs({
@@ -65,8 +67,8 @@ local function wrap(text, width)
 end
 
 local function clear_images(out)
-  for _, img in ipairs(out.images or {}) do
-    pcall(img.clear, img)
+  for _, img in pairs(out.images or {}) do
+    img:delete()
   end
   out.images, out.image_key = {}, nil
 end
@@ -124,14 +126,36 @@ end
 render_inline = function(buf, out, row)
   local win = vim.fn.bufwinid(buf)
   local width = (win ~= -1 and vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff or 80) - 4
-  local lines, n_text, slots, truncated = { status_line(out) }, 0, {}, 0
+  local lines, n_text, truncated = { status_line(out) }, 0, 0
   local text_hl = out.stale and "KernelOutputStale" or nil
+
+  -- Plots: only sent to the terminal again when they (or the room for
+  -- them) changed, not on every clock tick
+  local paths = {}
+  for _, item in ipairs(out.hidden and {} or out.items) do
+    if item.kind == "image" then
+      table.insert(paths, item.path)
+    end
+  end
+  local key = table.concat(paths, ",") .. ":" .. width
+  if key ~= out.image_key then
+    clear_images(out)
+    out.image_key = key
+    for i, path in ipairs(paths) do
+      out.images[i] = image.new(path, { max_cols = math.min(IMAGE_COLS, width + 2), max_rows = IMAGE_ROWS })
+    end
+  end
+
   if not out.hidden then
+    local n_img = 0
     for _, item in ipairs(out.items) do
       if item.kind == "image" then
-        table.insert(slots, { offset = #lines, path = item.path })
-        for _ = 1, IMAGE_ROWS do
-          table.insert(lines, { { " ", "" } })
+        n_img = n_img + 1
+        local img = out.images[n_img]
+        if img then
+          vim.list_extend(lines, img:virt_lines(2))
+        else
+          table.insert(lines, { { "  [plot]  \\mo to view", "KernelOutput" } })
         end
       else
         for _, l in ipairs(wrap((item.text:gsub("\n$", "")), math.max(width, 20))) do
@@ -151,40 +175,6 @@ render_inline = function(buf, out, row)
     table.insert(lines, { { "  … output hidden (\\mh to show)", "KernelOutput" } })
   end
   vim.api.nvim_buf_set_extmark(buf, ns, row, 0, { id = out.id, virt_lines = lines })
-
-  -- Plots: only re-placed when they (or where they go) changed, so the
-  -- running clock doesn't make them flicker
-  local key = table.concat(
-    vim.tbl_map(function(sl)
-      return sl.path .. "@" .. sl.offset
-    end, slots),
-    ","
-  ) .. ":" .. row .. ":" .. win .. ":" .. width
-  if key == out.image_key and #(out.images or {}) == #slots then
-    return
-  end
-  clear_images(out)
-  out.image_key = key
-  if #slots > 0 and win ~= -1 then
-    local ok, image = pcall(require, "image")
-    if ok then
-      for _, sl in ipairs(slots) do
-        local img = image.from_file(sl.path, {
-          window = win,
-          buffer = buf,
-          x = 2,
-          y = row,
-          height = IMAGE_ROWS,
-          render_offset_top = sl.offset,
-          inline = false,
-        })
-        if img then
-          pcall(img.render, img)
-          table.insert(out.images, img)
-        end
-      end
-    end
-  end
 end
 
 local function rerender_soon(buf, out)
@@ -631,7 +621,7 @@ function M.outputs(buf)
   return res
 end
 
--- Re-draw plots when the window changes (they're tied to a window).
+-- Re-draw when the window changes (text wraps and plots fit its width).
 vim.api.nvim_create_autocmd({ "BufWinEnter", "VimResized" }, {
   group = vim.api.nvim_create_augroup("KernelInline", { clear = true }),
   callback = function(ev)

@@ -53,8 +53,8 @@ Optional, per feature:
 | Feature | Needs |
 |---|---|
 | `<leader>g*` lazygit | `lazygit` |
-| `<leader>r*` LaTeX/markdown previews | `tectonic` or `pdflatex`, `pdftoppm` (poppler), `pandoc`; optional `magick` (ImageMagick); a terminal with the kitty graphics protocol (kitty, WezTerm, Ghostty) |
-| Inline plots (image.nvim) | `magick` (ImageMagick) and the same kind of terminal |
+| `<leader>r*` LaTeX/markdown previews | `tectonic` or `pdflatex`, `pdftoppm` (poppler), `pandoc`; optional `magick` (ImageMagick); a terminal with the kitty graphics protocol's Unicode placeholders (Ghostty, kitty; not WezTerm) |
+| Inline plots | the same kind of terminal (elsewhere a plot shows as a `[plot]` line that opens in the system viewer) |
 | R, knitting, kernels | R with `rmarkdown` and `IRkernel` (`IRkernel::installspec()`); a Python venv at `~/.venvs/nvim` with `jupyter_client` |
 | Jupyter notebooks, Python | `jupytext` (`brew install jupytext`); `nbconvert` in `~/.venvs/nvim` (for `\kk`); `ipykernel` in the project's `.venv` (registered as a kernel the first time Python code runs) |
 | Codeium completions | a free Codeium account: run `:Codeium Auth` once |

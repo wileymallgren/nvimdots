@@ -194,14 +194,28 @@ local function on_submit(c, text)
   end)
 end
 
+-- A plot big, in a float (q / <Esc> closes it); opened with the system
+-- viewer when the terminal can't show images.
 function M.view_image(path)
-  local ok, image = pcall(require, "image")
-  if not ok then
+  local width, height = math.floor(vim.o.columns * 0.8), math.floor(vim.o.lines * 0.8)
+  local img = require("config.image").new(path, { max_cols = width, max_rows = height, grow = true })
+  if not img then
     vim.ui.open(path)
     return
   end
   local buf = vim.api.nvim_create_buf(false, true)
-  local width, height = math.floor(vim.o.columns * 0.8), math.floor(vim.o.lines * 0.8)
+  local blank = {}
+  for i = 1, height do
+    blank[i] = ""
+  end
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, blank)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  local top, left = math.floor((height - img.rows) / 2), math.floor((width - img.cols) / 2)
+  for r = 0, img.rows - 1 do
+    local opts = { virt_text = img:chunks(r, left), virt_text_pos = "overlay" }
+    vim.api.nvim_buf_set_extmark(buf, plot_ns, top + r, 0, opts)
+  end
   local win = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
     style = "minimal",
@@ -211,14 +225,13 @@ function M.view_image(path)
     col = math.floor((vim.o.columns - width) / 2),
     title = " " .. vim.fs.basename(path) .. " ",
   })
-  local img = image.from_file(path, { window = win, buffer = buf, x = 0, y = 0, width = width, height = height })
-  if not img or not pcall(img.render, img) then
-    vim.api.nvim_win_close(win, true)
-    vim.ui.open(path)
-    return
-  end
+  local closed = false
   local function close()
-    pcall(img.clear, img)
+    if closed then
+      return -- (q closes the window, and WinLeave comes after)
+    end
+    closed = true
+    img:delete()
     pcall(vim.api.nvim_win_close, win, true)
   end
   vim.keymap.set("n", "q", close, { buffer = buf })
