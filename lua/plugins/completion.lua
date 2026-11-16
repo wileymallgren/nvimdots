@@ -5,34 +5,35 @@ local function region()
 end
 
 -- Sources for each kind of region; anything else gets the default list
-local DEFAULT_SOURCES = { "lsp", "kernel", "arg_values", "path", "snippets", "buffer", "columns", "codeium" }
+local DEFAULT_SOURCES = { "lsp", "kernel", "arg_values", "path", "snippets", "buffer", "columns", "minuet" }
 local SOURCES_BY_REGION = {
   -- language-server items (keywords, builtins, members) are noise here
-  comment = { "buffer", "path", "spell", "codeium" },
+  comment = { "buffer", "path", "spell", "minuet" },
   -- \frac, \alpha, ... (friendly-snippets' tex set is document-level:
   -- \plotgraph3d, \fractionlarge, ... and would outrank \frac), and the
   -- value of the arithmetic before an `=`
-  math = { "latex_calc", "latex_math", "codeium" },
+  math = { "latex_calc", "latex_math", "minuet" },
   yaml = { "buffer", "path" },
   -- spelling corrections for misspelled words (spell is on in prose
   -- filetypes, see lua/config/options.lua)
-  prose = { "lsp", "path", "snippets", "buffer", "spell", "codeium" },
+  prose = { "lsp", "path", "snippets", "buffer", "spell", "minuet" },
 }
 
 -- In R / Python code the sources also follow what goes at the cursor
--- (lua/config/cmp-slot.lua). Codeium helps where the rest is open-ended:
+-- (lua/config/cmp-slot.lua). The AI model (minuet) helps where the rest is
+-- open-ended:
 -- new lines, the rest of a call, and text for people (labs(title = "…"),
 -- message("…")). Where the argument takes a known kind of value (TRUE,
 -- a number, one of c("a", "b"), a function, a data frame, a colour, a
 -- column) or after df$ / pkg::, its guesses only push the real choices
 -- down, and so do snippets and plain buffer words.
-local UNTYPED_ARG = { "lsp", "kernel", "arg_values", "used_values", "columns", "path", "buffer", "codeium" }
+local UNTYPED_ARG = { "lsp", "kernel", "arg_values", "used_values", "columns", "path", "buffer", "minuet" }
 local function slot_sources(slot)
   local t = slot.type
   if slot.where == "member" then
     return { "lsp", "kernel", "columns" }
   elseif slot.where == "chain" then
-    return { "lsp", "kernel", "snippets", "buffer", "codeium" } -- ranked in fits_slot
+    return { "lsp", "kernel", "snippets", "buffer", "minuet" } -- ranked in fits_slot
   elseif t == "level" then
     -- filter(sex == "|: the column's values (cmp-columns.lua)
     return slot.quoted and { "columns", "lsp" } or { "columns", "lsp", "kernel" }
@@ -40,7 +41,7 @@ local function slot_sources(slot)
     return { "columns", "kernel", "lsp", "arg_values" }
   elseif t == "text" then
     -- words in the string; outside quotes a variable may hold the text
-    return slot.quoted and { "codeium", "buffer" } or UNTYPED_ARG
+    return slot.quoted and { "minuet", "buffer" } or UNTYPED_ARG
   elseif t == "colour" then
     return { "colours", "used_values", "lsp", "kernel" }
   elseif t == "logical" or t == "choice" then
@@ -52,7 +53,7 @@ local function slot_sources(slot)
   elseif slot.where == "value" or slot.where == "arg" then
     return UNTYPED_ARG
   elseif slot.where == "string" then
-    return { "lsp", "codeium", "buffer" } -- lsp: Python dict keys, Literal values
+    return { "lsp", "minuet", "buffer" } -- lsp: Python dict keys, Literal values
   end
 end
 
@@ -69,26 +70,27 @@ local function has_in_order(s, sub)
   return true
 end
 
--- Codeium suggestions include the closing `")` that autopairs has already
--- put after the cursor, and codeium.nvim's check for that is off by one
--- column (it compares from the character *before* the cursor), so
--- accepting print("hello") gave print("hello")"). When the rest of the
--- line is only closers and the suggestion re-types them in order, make the
--- edit replace them instead of inserting in front of them.
-local function codeium_eat_closers(ctx, items)
+-- AI suggestions include the closing `")` that autopairs has already put
+-- after the cursor, so accepting print("hel|") as `hello")` gave
+-- print("hello")"). When the rest of the line is only closers and the
+-- suggestion re-types them in order, make the edit replace them instead of
+-- inserting in front of them. minuet's items have only insertText (from the
+-- start of the word being typed), so give them the edit blink would make.
+local function ai_eat_closers(ctx, items)
   local after = ctx.line:sub(ctx.cursor[2] + 1)
   if after == "" or not after:match("^[%)%]}\"'`%s,;:]+$") then
     return items
   end
   local closers = after:gsub("%s", "")
+  local row = ctx.cursor[1] - 1
   for _, item in ipairs(items) do
-    local edit = item.textEdit
-    if edit and has_in_order(edit.newText, closers) then
-      for _, range in ipairs({ edit.insert, edit.replace, edit.range }) do
-        if range and range["end"].line == ctx.cursor[1] - 1 then
-          range["end"].character = #ctx.line
-        end
-      end
+    local text = item.textEdit and item.textEdit.newText or item.insertText
+    if text and has_in_order(text, closers) then
+      local range = {
+        start = { line = row, character = ctx.bounds.start_col - 1 },
+        ["end"] = { line = row, character = #ctx.line },
+      }
+      item.textEdit = { newText = text, insert = range, replace = range }
     end
   end
   return items
@@ -292,7 +294,7 @@ local function snippets_as_completions(ctx, items)
           item.label = first ~= text and first .. " …" or first
           item.filterText = first:sub(n - #keyword + 1)
           -- Matched more than the word being typed (`# App`, ```{r): a
-          -- strong hint, so rank it above Codeium and plain words
+          -- strong hint, so rank it above the AI model and plain words
           if n > #keyword then
             item.score_offset = (item.score_offset or 0) + 3
           end
@@ -481,10 +483,10 @@ local function fits_slot(ctx, items)
     return chain_rank(slot, items, ctx.get_keyword(), slot_lib.object_types("r"))
   end
   -- After a space in quoted text (labs(title = "Fuel use by |), only
-  -- Codeium's continuation, not every word in the buffer
+  -- the AI model's continuation, not every word in the buffer
   if t == "text" and slot.quoted and ctx.get_keyword() == "" then
     return vim.tbl_filter(function(item)
-      return item.source_id == "codeium"
+      return item.source_id == "minuet"
     end, items)
   end
   -- After df$ / obj. only members fit, not the R server's plain words
@@ -625,28 +627,30 @@ local function region_words(ctx, items)
   end, items)
 end
 
--- Codeium's best guess goes first, above even an exact match, when it is
--- likely the best item in the menu:
---   * Codeium is sure of it: score -1 or better. Over sampled requests, the
---     ones above that were right (`ret` -> `return a + b`, `su` ->
---     `sum(values)`, `rad` -> `radius * radius * height`); the ones below
---     were guesses (filter(mpg > 20), groupby on made-up columns, prose).
+-- The AI model's suggestion goes first, above even an exact match, when it
+-- is likely the best item in the menu:
+--   * the model is sure of it: mean token log-probability -0.3 or better
+--     (ai_score, lua/config/cmp-minuet.lua). For qwen2.5-coder:7b-base the
+--     right ones scored -0.07 to -0.24 (`ret` -> `return a + b`, `su` ->
+--     `sum(values)`, `rad` -> `radius**2 * height`, `mea` -> `mean(x)`);
+--     guesses -0.32 and below (filter(mpg > 20), groupby on made-up
+--     columns, prose, comments).
 --   * it still starts with what's typed, checked again on every keystroke:
---     blink reuses Codeium's items as the word grows, so a suggestion made
---     for `re` must not stay on top once `res` no longer fits it.
---   * it adds more than the word: Codeium completing `rad` to just `radius`
---     is no better than the language server's `radius`, which has docs.
--- Otherwise Codeium keeps its place below the language server.
-local CODEIUM_SURE = -1.0
-local function codeium_first(ctx, items)
+--     blink reuses the items as the word grows, so a suggestion made for
+--     `re` must not stay on top once `res` no longer fits it.
+--   * it adds more than the word: completing `rad` to just `radius` is no
+--     better than the language server's `radius`, which has docs.
+-- Otherwise it keeps its place below the language server.
+local AI_SURE = -0.3
+local function ai_first(ctx, items)
   local keyword = ctx.get_keyword()
   local best_i, best_score
   for i, item in ipairs(items) do
-    local score = item.source_id == "codeium" and item.codeium_score
-    local text = score and item.textEdit and item.textEdit.newText
+    local score = item.source_id == "minuet" and item.ai_score
+    local text = score and (item.textEdit and item.textEdit.newText or item.insertText)
     if
       text
-      and score >= CODEIUM_SURE
+      and score >= AI_SURE
       and (not best_score or score > best_score)
       and text:sub(1, #keyword) == keyword
       and text:sub(#text:match("^[%w_.]*") + 1):match("%S")
@@ -668,70 +672,60 @@ local function file_buffers()
 end
 
 return {
-  -- Codeium AI completions, shown as a blink.cmp source (free account needed)
+  -- AI completions from a local model: minuet-ai.nvim asking Ollama for a
+  -- fill-in-the-middle completion, shown as a blink.cmp source
+  -- (lua/config/cmp-minuet.lua). Free, offline, and the code never leaves
+  -- this machine. Codeium did this until its servers stopped answering
+  -- completion requests (2026-11).
   {
-    "Exafunction/codeium.nvim",
+    "milanglacier/minuet-ai.nvim",
     dependencies = { "nvim-lua/plenary.nvim" }, -- blink.cmp (below) loads this as a source
-    -- Run `:Codeium Auth` once to log in
-    opts = {
-      enable_cmp_source = false, -- Disable legacy nvim-cmp wrapper
-      virtual_text = { enabled = false }, -- suggestions go through blink.cmp instead
-    },
-    config = function(_, opts)
-      -- The language server sends completion requests to a built-in
-      -- https://inference.codeium.com, which has been removed from DNS
-      -- (NXDOMAIN on every resolver as of 2026-11), so every request fails
-      -- with "dial tcp: lookup inference.codeium.com: no such host" and
-      -- blink never gets an item. The API server (api.host) answers them
-      -- too: start the server with it as the inference URL. codeium.nvim
-      -- has no option for extra server flags, so add it where the job is
-      -- made.
-      local cio = require("codeium.io")
-      local make_job = cio.job
-      cio.job = function(args)
-        if type(args[1]) == "string" and args[1]:match("language_server") then
-          if not vim.tbl_contains(args, "--inference_api_server_url") then
-            local api = require("codeium.config").options.api
-            vim.list_extend(args, { "--inference_api_server_url", "https://" .. api.host .. ":" .. api.port })
-          end
-        end
-        return make_job(args)
-      end
-      require("codeium").setup(opts)
-      -- Network trouble reaches codeium.nvim as a failed completion request:
-      -- a slow round trip is {"code":"deadline_exceeded"}, and being offline
-      -- (or DNS failing) is {"code":"unknown","message":"unavailable: dial
-      -- tcp ... no such host"}. codeium.nvim already stays quiet for
-      -- "canceled" / 503 / 408 but not these, so they pop up as errors on
-      -- every keystroke. They only mean no suggestion this time: log them
-      -- instead. Other errors (auth, bad responses) still show.
-      local transient = { deadline_exceeded = true, unavailable = true }
-      local prefix = "completion request failed: "
-      local function is_transient(message)
-        if type(message) ~= "string" or message:sub(1, #prefix) ~= prefix then
-          return false
-        end
-        local ok, body = pcall(vim.json.decode, message:sub(#prefix + 1))
-        if not ok or type(body) ~= "table" then
-          return false
-        end
-        if transient[body.code] then
-          return true
-        end
-        -- The language server wraps transport errors as "unknown" and puts
-        -- the real code at the start of the message.
-        local inner = type(body.message) == "string" and body.message:match("^([%w_]+):")
-        return inner ~= nil and transient[inner] == true
-      end
-      local notify = require("codeium.notify")
-      local error_fn = notify.error
-      notify.error = function(message, ...)
-        if is_transient(message) then
-          require("codeium.log").debug(message)
-          return
-        end
-        return error_fn(message, ...)
-      end
+    config = function()
+      local ai = require("config.cmp-minuet")
+      -- The base (not instruct) model: trained for fill-in-the-middle.
+      -- `ollama pull qwen2.5-coder:7b-base` if it's missing.
+      local model = "qwen2.5-coder:7b-base"
+      require("minuet").setup({
+        provider = "openai_fim_compatible",
+        n_completions = 1, -- one request per keystroke pause; it's local
+        -- The whole buffer: ai.prompt / ai.suffix cut it so Ollama's
+        -- cached prompt still matches after a keystroke (cmp-minuet.lua)
+        context_window = 10000000,
+        -- Wait for a pause in typing. Shorter sent a request per keystroke,
+        -- and Ollama finishes some of a cancelled one before starting the
+        -- next, so each answer waited ~1 s behind the ones typed over.
+        debounce = 250,
+        throttle = 0, -- each new request cancels the one in flight
+        request_timeout = 3,
+        -- Only errors: a timeout while the model loads is just "no
+        -- suggestion yet"
+        notify = "error",
+        provider_options = {
+          openai_fim_compatible = {
+            name = "Ollama",
+            model = model,
+            api_key = function()
+              return "ollama" -- Ollama needs none; minuet wants one set
+            end,
+            end_point = ai.OLLAMA_URL .. "/api/generate",
+            stream = false,
+            template = {
+              prompt = ai.prompt, -- from a fixed line, with the chunk outputs
+              suffix = ai.suffix,
+            },
+            transform = {
+              -- length and stop are per request: ai.length()
+              ai.ollama_body(model, {
+                -- the likeliest completion: its confidence (ai_first) means
+                -- more than a sample's, and it doesn't change between
+                -- keystrokes
+                temperature = 0,
+              }),
+            },
+            get_text_fn = { no_stream = ai.get_text },
+          },
+        },
+      })
     end,
   },
 
@@ -742,7 +736,7 @@ return {
     "saghen/blink.cmp",
     dependencies = {
       "rafamadriz/friendly-snippets",
-      "Exafunction/codeium.nvim",
+      "milanglacier/minuet-ai.nvim",
       "ribru17/blink-cmp-spell", -- dictionary words in prose
     },
     version = "1.*",
@@ -762,7 +756,7 @@ return {
           -- Moved after blink's sort rather than with a Lua sort function,
           -- which would take sorting out of Rust on every keystroke
           local sorted = fuzzy(context, ok2 and with_used or merged)
-          local ok3, ranked = pcall(codeium_first, context, sorted)
+          local ok3, ranked = pcall(ai_first, context, sorted)
           return ok3 and ranked or sorted
         end
       end
@@ -866,7 +860,7 @@ return {
               return { "\n", "\t" }
             end
             -- and while writing text for people in quotes (labs(title =
-            -- "Fuel use by ), where Codeium continues the sentence
+            -- "Fuel use by ), where the AI model continues the sentence
             if before:match("%S%s$") then
               local slot = require("config.cmp-slot").here()
               if slot.type == "text" and slot.quoted then
@@ -910,7 +904,7 @@ return {
           -- and treesitter doesn't see it as one
           if (r.kind == "string" or r.kind == "code") and require("config.cmp-context").file_arg() then
             -- read.csv("…"): file names; lsp stays for Python Literal/dict keys.
-            -- No Codeium: it can only guess names the file source knows.
+            -- No AI model: it can only guess names the file source knows.
             return { "file_args", "lsp" }
           end
           -- ![](…) / [text](…) and bibliography: in a YAML header
@@ -1004,7 +998,7 @@ return {
           spell = {
             name = "Spell",
             module = "blink-cmp-spell",
-            -- Below words from your files and Codeium, so Tab doesn't swap
+            -- Below words from your files and the AI model, so Tab doesn't swap
             -- a half-typed word for a "correction"
             score_offset = -5,
             -- The source matches every correction against the word as typed,
@@ -1031,7 +1025,7 @@ return {
             name = "Calc",
             module = "config.cmp-latex-calc",
             -- Its items are 10 apart (0, -10, -20); even the last stays
-            -- above Codeium, so Tab takes the result
+            -- above the AI model, so Tab takes the result
             score_offset = 30,
           },
           buffer = {
@@ -1074,31 +1068,21 @@ return {
             module = "config.cmp-columns",
             score_offset = 5,
           },
-          codeium = {
-            name = "Codeium",
-            -- codeium.nvim's blink source, plus the chunk outputs shown
-            -- inline (lua/config/kernel/inline.lua), so prose about a chunk
-            -- can use its results
-            module = "config.cmp-codeium",
-            -- Only ask Codeium in real file buffers. Special buffers like
-            -- oil:///path/ make the Codeium server fail with
-            -- "empty share name for UNC-like path".
-            enabled = function()
-              local buf = vim.api.nvim_get_current_buf()
-              if vim.bo[buf].buftype ~= "" then
-                return false
-              end
-              local name = vim.api.nvim_buf_get_name(buf)
-              return not name:match("^%a[%w+.-]*://")
-            end,
-            -- Don't hold the menu for the network round trip: LSP/snippet
-            -- items show right away and Codeium's join when they arrive.
+          minuet = {
+            name = "AI",
+            -- minuet-ai.nvim's blink source asking a local model (Ollama),
+            -- plus the chunk outputs shown inline
+            -- (lua/config/kernel/inline.lua), so prose about a chunk can use
+            -- its results. Off in special buffers and while Ollama is down.
+            module = "config.cmp-minuet",
+            -- Don't hold the menu for the model: LSP/snippet items show
+            -- right away and the AI's join when they arrive.
             async = true,
-            timeout_ms = 1000,
+            timeout_ms = 3000, -- minuet's request_timeout
             -- In text for people (labs(title = "…"), see slot_sources) it's
             -- the one that knows what comes next: first there
             transform_items = function(ctx, items)
-              items = codeium_eat_closers(ctx, items)
+              items = ai_eat_closers(ctx, items)
               local slot = require("config.cmp-slot").here()
               if slot.type == "text" and slot.quoted then
                 for _, item in ipairs(items) do
@@ -1108,7 +1092,7 @@ return {
               return items
             end,
             -- Just below LSP, so Tab (super-tab) accepts the LSP item first,
-            -- unless Codeium is sure of a longer completion (codeium_first)
+            -- unless the model is sure of a longer completion (ai_first)
             score_offset = -2,
             max_items = 3,
           },

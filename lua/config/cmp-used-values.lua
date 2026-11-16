@@ -130,7 +130,7 @@ local function fits(value, t)
 end
 
 -- Slot types this source serves (cmp-slot.lua); "text" is one-off prose
--- (Codeium), "column" a column expression
+-- (the AI model), "column" a column expression
 local SKIP_TYPES = { text = true, column = true, level = true }
 
 -- The argument being written and its slot, or nil

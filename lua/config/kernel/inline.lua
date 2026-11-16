@@ -5,7 +5,7 @@
 -- in the console. Outputs follow edits (extmarks) and stay under the
 -- closing fence.
 --   run(c), run_all(upto, filter), delete(), clear_all(), toggle_hidden(),
---   open_float(), outputs(buf) (for lua/config/cmp-codeium.lua)
+--   open_float(), outputs(buf) (for lua/config/cmp-minuet.lua)
 --   set_inline(buf, on): off shows nothing under the chunks, not even the
 --   status (the workspace's side pane shows it all, workspace.lua)
 --   on_update(fn(buf, out)): called after every render of an output

@@ -26,6 +26,9 @@ LaTeX-heavy notes, with a few hand-written features:
   the kernel is the project's `.venv` (`lua/config/python-env.lua`).
 - **`gd` that knows reassignments** (`lua/config/goto-definition.lua`): goes to the assignment in effect at the
   cursor (closest above, in scope, across notebook chunks); `gd` again steps to the one before.
+- **Local AI completion** (`lua/config/cmp-minuet.lua`): minuet-ai.nvim asks a local Ollama model for
+  fill-in-the-middle completions in blink.cmp. Typing on a line gets the rest of that line, an empty line a short
+  block; in notebooks the prompt includes chunk outputs, and confident suggestions go to the top of the menu.
 - **`:MasonSync`**: installs the Mason tools listed in `lua/plugins/lsp.lua` on a new machine.
 
 ## Try it without touching your own config
@@ -57,7 +60,7 @@ Optional, per feature:
 | Inline plots | the same kind of terminal (elsewhere a plot shows as a `[plot]` line that opens in the system viewer) |
 | R, knitting, kernels | R with `rmarkdown` and `IRkernel` (`IRkernel::installspec()`); a Python venv at `~/.venvs/nvim` with `jupyter_client` |
 | Jupyter notebooks, Python | `jupytext` (`brew install jupytext`); `nbconvert` in `~/.venvs/nvim` (for `\kk`); `ipykernel` in the project's `.venv` (registered as a kernel the first time Python code runs) |
-| Codeium completions | a free Codeium account: run `:Codeium Auth` once |
+| AI completions (local) | [Ollama](https://ollama.com) with `ollama pull qwen2.5-coder:7b-base` (Neovim starts `ollama serve` itself; without it the AI source stays off) |
 | `<leader>R*` remote editing | SSH hosts in `~/.ssh/config` (note: remote-nvim.nvim is archived upstream) |
 | Julia LSP, R LSP, `rustfmt`, `styler` | come from the Julia / R / Rust toolchains, not Mason |
 
