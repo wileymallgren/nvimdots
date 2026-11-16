@@ -92,7 +92,9 @@ return {
             statusline = { "alpha", "dashboard" }, -- Hides lualine on alpha dashboard
             winbar = {},
           },
-          always_divide_middle = true,
+          -- Only matters for the tabline (the statusline has x/y/z sections, which divide it
+          -- anyway): its fill comes from the component below instead of lualine_c's colours
+          always_divide_middle = false,
           globalstatus = true,
           always_show_tabline = true, -- even with a single tab
         },
@@ -139,6 +141,17 @@ return {
               end,
               show_modified_status = false, -- tab_label shows it
               fmt = tab_label,
+              -- Underlined groups (lua/plugins/colorscheme.lua) draw a thin line under the tabline
+              tabs_color = { active = "LualineTabActive", inactive = "LualineTabInactive" },
+            },
+            -- The rest of the row, in its own group so the underline runs the full width
+            -- without touching lualine_c_*, which the statusline shares
+            {
+              function()
+                return "%="
+              end,
+              color = "LualineTabFill",
+              padding = 0,
             },
           },
         },

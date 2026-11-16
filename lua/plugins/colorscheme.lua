@@ -20,10 +20,19 @@ return {
           BlinkCmpSignatureHelp = { bg = colors.base },
           BlinkCmpSignatureHelpBorder = { bg = colors.base, fg = colors.blue },
           DiagnosticUnderlineError = { undercurl = true, sp = colors.red },
+          -- Window split lines in a light grey (catppuccin defaults them to the near-black crust)
+          WinSeparator = { fg = colors.overlay0, bg = colors.base },
           -- nvim-tree uses the editor background (catppuccin defaults it to the darker mantle),
-          -- with a normal split line so the tree doesn't blend into the buffer
+          -- with the same split line so the tree doesn't blend into the buffer
           NvimTreeNormal = { fg = colors.text, bg = colors.base },
-          NvimTreeWinSeparator = { fg = colors.crust, bg = colors.base },
+          NvimTreeWinSeparator = { fg = colors.overlay0, bg = colors.base },
+          -- lualine's tabline (lua/plugins/lualine.lua), underlined in the split-line grey: a
+          -- thin line between it and the windows. Ghostty draws underlines just under the text
+          -- baseline, not at the cell bottom, so the row uses the editor background (any other
+          -- colour shows as a strip below the line); the active tab is blue, line included.
+          LualineTabActive = { fg = colors.blue, bg = colors.base, bold = true, underline = true, sp = colors.blue },
+          LualineTabInactive = { fg = colors.overlay1, bg = colors.base, underline = true, sp = colors.overlay0 },
+          LualineTabFill = { bg = colors.base, underline = true, sp = colors.overlay0 },
         }
       end,
     },
