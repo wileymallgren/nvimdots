@@ -65,10 +65,38 @@ local cfg = {
 local previews = {} -- bufnr -> { [row] = preview (:clear() removes it) }
 local image_ns = vim.api.nvim_create_namespace("tex_preview_images")
 
+local function text_width(win)
+  return vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+end
+
+-- magick command that makes the PNG at `png` exactly a whole number of
+-- terminal cells (shrunk to fit at most max_cols x max_rows, then padded
+-- with `bg`), so the terminal draws it unscaled: scaled into cells, a 1px
+-- rule on a row edge (an \fbox's bottom) can vanish. Also trims the
+-- anti-aliased 2px edge where the page was cropped. nil if not a PNG.
+local function to_cells(png, textw, bg)
+  local image = require("config.image")
+  local pw, ph = image.png_size(png)
+  if not pw or pw <= 8 or ph <= 8 then
+    return nil
+  end
+  pw, ph = pw - 4, ph - 4 -- (after -shave 2x2)
+  local cw, ch = image.cell_size()
+  local s = math.min(1, math.min(cfg.max_cols, textw) * cw / pw, cfg.max_rows * ch / ph)
+  local w, h = math.max(1, math.floor(pw * s + 0.5)), math.max(1, math.floor(ph * s + 0.5))
+  local cmd = { "magick", png, "-shave", "2x2" }
+  if s < 1 then
+    vim.list_extend(cmd, { "-resize", ("%dx%d!"):format(w, h) })
+  end
+  local W, H = math.ceil(w / cw) * cw, math.ceil(h / ch) * ch
+  vim.list_extend(cmd, { "-background", bg, "-gravity", "center", "-extent", ("%dx%d"):format(W, H), png })
+  return cmd
+end
+
 -- The PNG at `path` in virtual lines under 0-based line `y` of `buf`, as
 -- wide as at most window `win`'s text. nil if it can't be shown.
 local function place(buf, win, y, path)
-  local textw = vim.api.nvim_win_get_width(win) - vim.fn.getwininfo(win)[1].textoff
+  local textw = text_width(win)
   local img = require("config.image").new(path, { max_cols = math.min(cfg.max_cols, textw), max_rows = cfg.max_rows })
   if not img then
     return nil
@@ -475,17 +503,19 @@ local function render(buf, win, row, body, opts)
   local tex = dir .. "/snip.tex"
   local pal = palette()
   local magick = vim.fn.executable("magick") == 1
+  -- Matching the colorscheme, the page is left transparent (pdftocairo), so
+  -- whatever is behind the cells shows: the window's background, also
+  -- while dim-behind-float dims the window's text (and the image with it)
+  local transparent = cfg.theme ~= "paper" and not cfg.bg and vim.fn.executable("pdftocairo") == 1
   local doc = {
-    "\\documentclass[preview,border=0pt]{standalone}",
+    ("\\documentclass[preview,border=%s]{standalone}"):format(cfg.pad),
     "\\usepackage{" .. cfg.packages .. "}",
     ("\\definecolor{pvfg}{HTML}{%s}"):format(pal.fg),
     ("\\definecolor{pvbg}{HTML}{%s}"):format(pal.bg),
-    "\\pagecolor{pvbg}",
-    ("\\setlength{\\fboxsep}{%s}"):format(cfg.pad),
+    transparent and "" or "\\pagecolor{pvbg}",
     "\\providecommand{\\tightlist}{\\setlength{\\itemsep}{0pt}\\setlength{\\parskip}{0pt}}",
     "\\newsavebox{\\pvbox}",
     "\\begin{document}",
-    -- lrbox (not \fcolorbox{...}{body}) so blank lines in the body are fine
     "\\begin{lrbox}{\\pvbox}%",
     ("\\begin{varwidth}{%s}%%"):format(cfg.width),
     "\\color{pvfg}",
@@ -494,7 +524,7 @@ local function render(buf, win, row, body, opts)
   vim.list_extend(doc, {
     "\\end{varwidth}%",
     "\\end{lrbox}%",
-    "\\colorbox{pvbg}{\\usebox{\\pvbox}}",
+    "\\usebox{\\pvbox}",
     "\\end{document}",
   })
   vim.fn.writefile(doc, tex)
@@ -505,13 +535,15 @@ local function render(buf, win, row, body, opts)
         done()
         return fail(opts, "LaTeX failed:\n" .. (r1.stdout or "") .. (r1.stderr or ""))
       end
+      local raster = transparent and { "pdftocairo", "-png", "-transp" } or { "pdftoppm", "-png" }
+      vim.list_extend(raster, { "-r", tostring(cfg.dpi), "-singlefile", dir .. "/snip.pdf", dir .. "/snip" })
       vim.system(
-        { "pdftoppm", "-png", "-r", tostring(cfg.dpi), "-singlefile", dir .. "/snip.pdf", dir .. "/snip" },
+        raster,
         {},
         function(r2)
           done()
           if r2.code ~= 0 then
-            return fail(opts, "pdftoppm failed")
+            return fail(opts, raster[1] .. " failed")
           end
           local function show()
             vim.schedule(function()
@@ -545,20 +577,20 @@ local function render(buf, win, row, body, opts)
               end
             end)
           end
-          -- Trim the anti-aliased 2px edge (where the crop blends with the white
-          -- page) and add back a solid background-coloured margin.
-          if magick then
-            local png = dir .. "/snip.png"
-            vim.system(
-              { "magick", png, "-shave", "2x2", "-bordercolor", "#" .. pal.bg, "-border", "2x2", png },
-              {},
-              function()
-                show()
-              end
-            )
-          else
-            show()
+          if not magick then
+            return show()
           end
+          vim.schedule(function()
+            local png = dir .. "/snip.png"
+            local cmd = vim.api.nvim_win_is_valid(win)
+              and to_cells(png, text_width(win), transparent and "none" or ("#" .. pal.bg))
+            if not cmd then
+              return show()
+            end
+            vim.system(cmd, {}, function()
+              show()
+            end)
+          end)
         end
       )
     end)

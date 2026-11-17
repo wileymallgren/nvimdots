@@ -122,7 +122,9 @@ function M.available()
   return false
 end
 
--- Pixel size of a terminal cell (8 x 16 when the terminal doesn't say).
+-- Pixel size of a terminal cell, whole pixels (8 x 16 when the terminal
+-- doesn't say). A PNG exactly cols*w x rows*h is drawn unscaled: scaled
+-- ones can lose a 1px line that lands on a row edge.
 local cell
 function M.cell_size()
   if cell then
@@ -138,7 +140,9 @@ function M.cell_size()
     for _, fd in ipairs({ 1, 2, 0 }) do
       local sz = ffi.new("config_image_winsize")
       if ffi.C.ioctl(fd, req, sz) == 0 and sz.xpixel > 0 and sz.ypixel > 0 and sz.col > 0 and sz.row > 0 then
-        cell = { sz.xpixel / sz.col, sz.ypixel / sz.row }
+        -- Ghostty counts its window padding in the pixel size (2968 px for
+        -- 185 cells of 16), so round down to whole pixels
+        cell = { math.max(1, math.floor(sz.xpixel / sz.col)), math.max(1, math.floor(sz.ypixel / sz.row)) }
         return cell[1], cell[2]
       end
     end
