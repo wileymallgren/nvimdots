@@ -107,6 +107,8 @@ return {
     require("telescope").setup({
       defaults = {
         vimgrep_arguments = vimgrep_arguments,
+        -- Shade code chunks of .Rmd / .qmd / .md files in the preview too
+        buffer_previewer_maker = require("config.chunk-hl").previewer_maker,
         mappings = {
           i = {
             ["<esc>"] = actions.close, -- close Telescope instead of entering normal mode

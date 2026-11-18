@@ -38,6 +38,26 @@ function M.highlight(buf)
   end)
 end
 
+-- Telescope's buffer_previewer_maker, plus chunk shading in the preview. The
+-- preview buffer never gets a filetype, so the FileType autocmd below can't
+-- shade it. The shading goes on in telescope's callback, which runs in the
+-- same tick as the lines are set, so the preview never shows unshaded first.
+function M.previewer_maker(filepath, bufnr, opts)
+  opts = opts or {}
+  if chunks.NOTEBOOK_FT[vim.filetype.match({ filename = filepath }) or ""] then
+    local callback = opts.callback
+    opts = vim.tbl_extend("force", opts, {
+      callback = function(b, ...)
+        M.highlight(b)
+        if callback then
+          callback(b, ...)
+        end
+      end,
+    })
+  end
+  require("telescope.previewers").buffer_previewer_maker(filepath, bufnr, opts)
+end
+
 -- While typing: refresh on the first change at once, then at most once more
 -- per 50 ms for the changes that follow
 local pending = {}
